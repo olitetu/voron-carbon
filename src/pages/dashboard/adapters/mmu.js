@@ -147,11 +147,19 @@ export function mmuVals(ctx) {
   const C = 2 * Math.PI * 25;
   const spools = spoolDefs.map((s, i) => ({
     go: () => (i < NUM_GATES ? call("selectGate", i) : call("selectBypass")),
+    // "Change filament" — opens the shared gate editor (lib/GateEditor.jsx). The whole card is one big
+    // onClick that SELECTS the gate, so this must swallow the event or clicking edit would also move the
+    // selector. Bypass has no gate map entry, hence no button.
+    edit: i < NUM_GATES ? (e => { if (e && e.stopPropagation) e.stopPropagation(); set({ gateEditor: i }); }) : null,
+    editTitle: i < NUM_GATES ? "Change the filament in gate " + i : "",
+    editStyle: i < NUM_GATES
+      ? "position:absolute; top:3px; right:3px; width:15px; height:15px; display:flex; align-items:center; justify-content:center; border-radius:3px; cursor:pointer; font-family:'JetBrains Mono',monospace; font-size:9px; color:#4d5a6b; background:rgba(13,18,26,.75)"
+      : "display:none",
     color: s.color, op: s.op, pct: s.pct, name: s.name, mat: s.mat, gate: s.g,
     dash: `${(C * s.fill).toFixed(1)} ${C.toFixed(1)}`,
     cardStyle: "background:" + (s.active ? "#150f10" : s.selected ? "#0f151d" : "#0d121a") +
       "; border:1px solid " + (s.active ? A : s.selected ? "#8b98aa" : "#1c2430") +
-      "; border-radius:5px; padding:8px 4px 6px; min-width:0; display:flex; flex-direction:column; gap:4px; cursor:pointer; transition:border-color .15s" +
+      "; border-radius:5px; padding:8px 4px 6px; min-width:0; display:flex; flex-direction:column; gap:4px; cursor:pointer; transition:border-color .15s; position:relative" +
       (s.active ? "; box-shadow:0 0 14px rgba(255,90,51,.18)" : ""),
     pctStyle: "font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:700; color:" + (s.low ? "#f0b429" : s.pct ? "#e8eef6" : "#3d4859"),
     // Single line with an ellipsis: below ~1500 px the spool card is ~54 px wide, and a two-word filament
@@ -493,9 +501,20 @@ export function mmuVals(ctx) {
     })),
     preNodes: [chainNode({ at: .30, from: 0, label: "ENCODER", on: encoderOn, off: "—", w: 62, badge: encoderBadge, last: false })],
     postNodes: [chainNode({ at: 1, from: .75, label: "NOZZLE", on: nozzleOn, off: "empty", w: 56, last: true })],
-    mmuMenu: [["Recover state", "MMU_RECOVER"], ["Reset MMU", "MMU_RESET"], ["Edit gate map", "GATE_MAP"], ["Calibrate gates", "CHECK_GATE"], ["Filament stats", "STATS"], ["MMU settings", "SETTINGS"]].map(row => ({
+    // "Edit gate map" opens the in-app gate editor for the SELECTED gate. It used to dispatch GATE_MAP,
+    // which opened Mainsail's MMU panel in a new tab — dead inside Orca's webview, and a dependency on
+    // the app Carbon is meant to replace. Same dialog as the spool cards' edit button: one implementation.
+    mmuMenu: [["Recover state", "MMU_RECOVER"], ["Reset MMU", "MMU_RESET"], ["Edit gate map", "GATE_EDITOR"], ["Calibrate gates", "CHECK_GATE"], ["Filament stats", "STATS"], ["MMU settings", "SETTINGS"]].map(row => ({
       t: row[0],
-      go: () => { set({ mmuMenuOpen: false }); call("mmuMenuAction", row[1]); },
+      go: () => {
+        set({ mmuMenuOpen: false });
+        if (row[1] === "GATE_EDITOR") {
+          const sel = Number(gate);   // `gate` is the selected gate from ctx.common (null when unknown)
+          set({ gateEditor: Number.isInteger(sel) && sel >= 0 && sel < NUM_GATES ? sel : 0 });
+          return;
+        }
+        call("mmuMenuAction", row[1]);
+      },
       style: "padding:6px 10px; border-radius:3px; cursor:pointer; font-size:11.5px; color:#8b98aa"
     })),
     mmuDotsStyle: `font-family:'JetBrains Mono',monospace; font-size:12px; cursor:pointer; margin-left:auto; color:${ui.mmuMenuOpen ? "#e8eef6" : "#4d5a6b"}`,

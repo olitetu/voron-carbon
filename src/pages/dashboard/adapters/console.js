@@ -10,18 +10,22 @@
 //
 // Line rules (CONTRACT "Console"): kind 'err' when type==='error' or the message starts with `!!`; 'info' when it starts
 // with `//`; commands plain; 'ok' for lines containing complete|success|ready; time HH:MM from `time`; the `// ` / `!! `
-// markers and HTML tags (Happy Hare wraps its output in <span>/<b>) are stripped. 12 lines collapsed, 40 expanded.
+// markers and HTML tags (Happy Hare wraps its output in <span>/<b>) are stripped. The panel scrolls: 300 lines are
+// rendered into a 12-row (collapsed) or 1100 px (expanded) box, both overflow-y:auto.
 
 // ---- design constants (verbatim) -------------------------------------------------------------------------------
 export const KIND_COLOR = { ok: "#3ddcc4", warn: "#f0b429", err: "#ff5a33" };
 const LINE_STYLE = "min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:";
-const COLLAPSED_LINES = 12;
-const EXPANDED_LINES = 40;
-// One row is 10.5px mono at line-height 1.5 (15.75 px) plus the list's 3 px gap. The collapsed box used to be
-// a flat 112 px, which is SIX rows: half of the twelve lines collected here were rendered into the DOM and then
-// clipped away by overflow:hidden. The height follows the line count so the panel shows what it collects.
+// How many lines are RENDERED. Deliberately far larger than either box height: the panel is a scrollback,
+// so there has to be more in the DOM than fits or there is nothing to scroll. st.log is capped at 2000 by
+// boot.appendLog, and one row is a flex div with two spans, so 300 rows (~900 nodes) is a safe budget.
+const SCROLLBACK_LINES = 300;
+// One row is 10.5px mono at line-height 1.5 (15.75 px) plus the list's 3 px gap. These are the VISIBLE box
+// heights only; they no longer bound how many lines exist (see SCROLLBACK_LINES). Tying the two together is
+// what made the panel unscrollable: 12 lines in a 12-line box with overflow:hidden has nothing to reveal.
 const ROW_PX = 19;
-const COLLAPSED_PX = COLLAPSED_LINES * ROW_PX;   // 228
+const COLLAPSED_ROWS = 12;
+const COLLAPSED_PX = COLLAPSED_ROWS * ROW_PX;   // 228
 const EXPANDED_PX = 1100;
 
 /** The design's per-line style: `{ok,warn,err}[kind] || "#8b98aa"` (info and plain lines share the grey). */
@@ -197,7 +201,7 @@ export function consoleVals(ctx) {
   const expanded = !!ui.consoleExpanded;
   const set = typeof c.set === "function" ? c.set : () => {};
 
-  const lines = collectLines(st.log, expanded ? EXPANDED_LINES : COLLAPSED_LINES);
+  const lines = collectLines(st.log, SCROLLBACK_LINES);
   if (!lines.length) lines.push({ t: "--:--", m: st.connected === false ? "Not connected to Moonraker" : "—", kind: undefined });
   const logLines = lines.map(l => ({ t: l.t, m: l.m, style: lineStyle(l.kind) }));
 
@@ -219,7 +223,9 @@ export function consoleVals(ctx) {
     toggleConsole: () => set(s => ({ consoleExpanded: !(s && s.consoleExpanded) })),
     consoleArrow: expanded ? "▼" : "◀",
     consoleArrowStyle: "width:20px; height:20px; margin-left:8px; border:1px solid #1c2430; border-radius:3px; display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-size:9px; color:#8b98aa; cursor:pointer; transition:.12s",
-    consoleBodyStyle: `display:flex; flex-direction:column; gap:3px; transition:max-height .28s ease; max-height:${expanded ? EXPANDED_PX : COLLAPSED_PX}px; overflow-y:${expanded ? "auto" : "hidden"}`,
+    // overflow-y is ALWAYS auto. It used to be "hidden" when collapsed, which made the collapsed panel a
+    // dead 12-line window onto a 2000-line store with no way to reach the rest.
+    consoleBodyStyle: `display:flex; flex-direction:column; gap:3px; transition:max-height .28s ease; max-height:${expanded ? EXPANDED_PX : COLLAPSED_PX}px; overflow-y:auto; overscroll-behavior:contain`,
     clock: ui.clock || nowClock(),
   };
 }

@@ -6,7 +6,9 @@
 //               when Klipper has not reported a position yet. `max` / the bar's 100 % = the printer's travel from
 //               raw.toolhead.axis_maximum (335 / 355 / 320 on this Voron), falling back to the contract's 350 / 350 / 310.
 //   homeBtns  → act.home('HOME' | 'XY' | 'QGL' | 'MESH')                   (G28 · G28 X Y · QUAD_GANTRY_LEVEL · BED_MESH_CALIBRATE)
-//   jogRows   → act.jog(axis, ±step)  X/Y 100·50·1, Z 50·10·1; the centre axis cell homes (Z → HOME, X/Y → XY) like the design
+//   jogRows   → act.jog(axis, ±step)  X/Y 100·50·1, Z 50·10·1; the centre axis cell homes THAT axis only (X → G28 X, …).
+//               Was (Z → HOME, X/Y → XY) to match the design mockup, but a per-axis button that homes all three is a
+//               surprise on a printer mid-setup — and act.home already supports the X / Y / Z kinds (see actions/toolhead.js).
 //   zSteps    → act.nudgeZ(±0.005 | ±0.025)                                 (SET_GCODE_OFFSET Z_ADJUST=… MOVE=1)
 //   zField    ← raw.gcode_move.homing_origin[2].toFixed(3) via ctx.field('zoff', shown, commit) → act.setZ(n)
 //   saveZ     → act.saveZ()                                                 (Z_OFFSET_APPLY_PROBE → "SAVE_CONFIG pending")
@@ -111,7 +113,7 @@ export function toolheadVals(ctx) {
       jogCell("−" + st[0], null, () => jog(ax, -st[0])),
       jogCell("−" + st[1], null, () => jog(ax, -st[1])),
       jogCell("−" + st[2], null, () => jog(ax, -st[2])),
-      jogCell(ax, "axis", () => home(ax === "Z" ? "HOME" : "XY")),
+      jogCell(ax, "axis", () => home(ax)),
       jogCell("+" + st[2], null, () => jog(ax, st[2])),
       jogCell("+" + st[1], null, () => jog(ax, st[1])),
       jogCell("+" + st[0], null, () => jog(ax, st[0]))

@@ -7,6 +7,7 @@
 // measure) and the animation ticks, then merges every adapter's keys into the object Template.jsx consumes.
 import React from "react";
 import Template from "./Template.jsx";
+import GateEditor from "../../lib/GateEditor.jsx";
 
 import { commonVals } from "./adapters/common.js";
 import { shellVals } from "./adapters/shell.js";
@@ -44,6 +45,9 @@ export class DashboardLogic extends React.Component {
     ledPicker: null, mmuMenuOpen: false, macroPickerOpen: false, servoMenuOpen: false,
     soakMenuOpen: false, macroPickerFor: null, iconPickFor: null, mapOpen: null,
     excludeOpen: false, consoleExpanded: false,
+    // Gate editor: the gate number whose "change filament" dialog is open, or null. Lives here rather
+    // than in the MMU adapter because the dialog is a sibling of Template, not part of the panel markup.
+    gateEditor: null,
     // edit buffers & confirms
     edits: {}, macroEdits: {}, confirmId: null, confirmCancel: false, confirmSave: false, excludedAt: {},
     // selections the design keeps in the UI
@@ -314,7 +318,14 @@ export class DashboardLogic extends React.Component {
   }
 
   render() {
-    return <Template V={this.renderVals()} />;
+    const g = this.state.gateEditor;
+    return <>
+      <Template V={this.renderVals()} />
+      {/* Rendered outside Template so the scrim covers the whole app; the same component also serves
+          the SPOOLMAN page's gate strip, so there is exactly one gate editor in the build. */}
+      <GateEditor open={g !== null} gate={g} store={this.props.store} api={this.props.api}
+        act={this.act} onClose={() => this.setState({ gateEditor: null })} />
+    </>;
   }
 }
 

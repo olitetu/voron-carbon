@@ -4,7 +4,8 @@
 //   printPause()          → api.pausePrint()            (only while printing)
 //   printResume()         → api.resumePrint()           (only while paused)
 //   printCancel()         → api.cancelPrint()           (only while printing/paused; the UI confirms first via ctx.ui.confirmCancel)
-//   printAction(a)        → the design's print("PAUSE"|"RESUME"|"CANCEL") dispatcher
+//   printClear()          → SDCARD_RESET_FILE            (only once a job has finished — complete / cancelled / error)
+//   printAction(a)        → the design's print("PAUSE"|"RESUME"|"CANCEL"|"CLEAR") dispatcher
 //   estop()               → api.emergencyStop()         (M112 — no confirm: it is the emergency button)
 //   firmwareRestart()     → api.firmwareRestart()       (the button while klippy is 'shutdown' / 'error')
 //   klipperRestart()      → api.serviceRestart('klipper') (the button while klippy is 'disconnected' — firmware_restart cannot reach it)
@@ -16,6 +17,8 @@
 // The confirm steps (CANCEL, SAVE_CONFIG) are UI state handled by src/pages/dashboard/adapters/job.js; these actions run the
 // real command as soon as they are called. Every action logs its intent, awaits the RPC, logs errors instead of throwing and
 // resolves true when the printer accepted the command (false when refused or failed).
+import { has } from "../caps.js";
+
 export function makeJobActions({ api, store, log } = {}) {
   const L = (m, k) => { try { if (typeof log === "function") log(m, k || "info"); } catch (e) { /* console-panel logging is best-effort */ } };
   const state = () => (store && store.state) || {};
@@ -52,12 +55,41 @@ export function makeJobActions({ api, store, log } = {}) {
       if (!isActive()) { L("Nothing to cancel — no active print", "warn"); return Promise.resolve(false); }
       return run("CANCEL_PRINT", "err", () => api.cancelPrint());
     },
+    /**
+     * CLEAR — put the printer back in standby after a job has finished.
+     *
+     * Klipper leaves print_stats.state at `complete` / `cancelled` / `error` and virtual_sdcard still
+     * holding the file, so the panel keeps showing the finished job (its filename, its progress, its
+     * stats) until something resets it. SDCARD_RESET_FILE unloads the file and returns the state to
+     * `standby`, which is what every other frontend calls "clear".
+     *
+     * Refused while a print is active: SDCARD_RESET_FILE on a live job would unload the file from under
+     * Klipper. Cancel first — cancelling is what makes this available.
+     */
+    printClear() {
+      if (noApi()) return Promise.resolve(false);
+      if (isActive()) {
+        L("CLEAR refused — a print is " + printState() + ". Cancel it first.", "warn");
+        return Promise.resolve(false);
+      }
+      const s = printState();
+      if (s === "standby") { L("Nothing to clear — already in standby", "warn"); return Promise.resolve(false); }
+      // has() returns null when the command catalogue has not loaded yet, so stay optimistic.
+      if (has(state(), "SDCARD_RESET_FILE") === false) {
+        L("SDCARD_RESET_FILE is not registered on this printer — no [virtual_sdcard] section?", "err");
+        return Promise.resolve(false);
+      }
+      const f = (raw().print_stats || {}).filename;
+      return run("SDCARD_RESET_FILE — clearing " + (f ? "'" + f + "'" : "the finished job") + " (" + s + ") and returning to standby", "ok",
+        () => api.gcode("SDCARD_RESET_FILE"));
+    },
     /** Design's print(action) dispatcher: "PAUSE" | "RESUME" | "CANCEL". */
     printAction(action) {
       const a = String(action || "").toUpperCase();
       if (a === "PAUSE") return actions.printPause();
       if (a === "RESUME") return actions.printResume();
       if (a === "CANCEL") return actions.printCancel();
+      if (a === "CLEAR") return actions.printClear();
       L("Unknown print action: " + action, "warn");
       return Promise.resolve(false);
     },

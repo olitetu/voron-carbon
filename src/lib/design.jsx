@@ -73,6 +73,38 @@ export function Menu({ open, items, onClose, style }) {
     {items.map((it, i) => <Hv key={i} as="div" onClick={() => { it.go && it.go(); onClose && onClose(); }} style={`padding:5px 8px; border-radius:3px; cursor:pointer; ${mono(9.5, `color:${it.color || T.mute}`)}; white-space:nowrap`} hover={`background:${T.panel3}; color:${T.text}`}>{it.t}</Hv>)}
   </div>;
 }
+/**
+ * Centred modal over a scrim. Used where the content is too tall for `Menu` (a dropdown) and too
+ * consequential for `Confirm` (an inline strip) — the gate editor is both.
+ *
+ * Escape and a scrim click both close it. The scrim stops wheel events reaching the page behind, and
+ * the card stops click propagation so a modal opened from inside a clickable row (the MMU spool cards
+ * are one big onClick) does not re-trigger that row when you interact with the dialog.
+ */
+export function Modal({ open, title, onClose, children, footer, width = 420 }) {
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onKey = e => { if (e.key === "Escape") { e.stopPropagation(); onClose && onClose(); } };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  return <div onClick={onClose} onWheel={e => e.stopPropagation()}
+    style={S("position:fixed; inset:0; z-index:200; background:rgba(3,5,8,.72); display:flex; align-items:center; justify-content:center; padding:24px; animation:vRise .14s ease both")}>
+    <div onClick={e => e.stopPropagation()}
+      style={S(`width:${width}px; max-width:100%; max-height:100%; overflow-y:auto; background:${T.panel}; border:1px solid ${T.line2}; border-radius:7px; box-shadow:0 18px 48px rgba(0,0,0,.7); display:flex; flex-direction:column`)}>
+      <div style={S(`flex:none; display:flex; align-items:center; gap:10px; padding:11px 14px; border-bottom:1px solid ${T.line}`)}>
+        <div style={S(`width:3px; height:11px; background:${T.accent}; border-radius:1px`)} />
+        <div style={S(mono(10, `letter-spacing:.14em; color:${T.text}`))}>{title}</div>
+        <Hv as="div" onClick={onClose} title="Close (Esc)"
+          style={`margin-left:auto; cursor:pointer; padding:2px 6px; border-radius:3px; ${mono(12, `color:${T.faint}`)}`}
+          hover={`background:${T.panel3}; color:${T.text}`}>{"\u00d7"}</Hv>
+      </div>
+      <div style={S("flex:1; min-height:0; padding:14px")}>{children}</div>
+      {footer ? <div style={S(`flex:none; display:flex; align-items:center; gap:8px; padding:11px 14px; border-top:1px solid ${T.line}`)}>{footer}</div> : null}
+    </div>
+  </div>;
+}
 /** Confirm strip (design's exclude-object confirm pattern). */
 export function Confirm({ text, onYes, onNo, yes = "CONFIRM", no = "CANCEL" }) {
   return <div style={S("flex:none; padding:12px 14px; border-top:1px solid #3a2f14; background:#14100a; display:flex; align-items:center; gap:14px; animation:vRise .16s ease both")}>

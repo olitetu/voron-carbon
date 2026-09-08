@@ -5,41 +5,24 @@ import React from "react";
 import { Panel, Btn, Chip, Label, Val, Row, Divider, Input, Table, Confirm, T, mono, fmtDate } from "../../lib/design.jsx";
 import { S, Hv } from "../../lib/ui.js";
 import { useStore, useAsync, usePersisted } from "../../lib/useStore.js";
+import GateEditor from "../../lib/GateEditor.jsx";
+import { makeMmuActions } from "../../lib/actions/mmu.js";
+import { useSpoolList, num, swatch, grams, metres, whenSeconds, spoolName, fillOf, filterSpools, EMPTY_COLOR, DESIGN_BLACK, LOW } from "../../lib/spools.js";
 
 // Spoolman's address comes from moonraker.conf ([spoolman] server:). When that lookup fails, fall
 // back the way the contract does — Moonraker's own host on Spoolman's default port, never a literal
 // hostname, because this build is also served from the printer itself under whatever name it answers to.
 const fallbackUrl = api => String((api && api.base) || (typeof location !== "undefined" ? location.origin : "")).replace(/:\d+$/, "") + ":7912";
-const EMPTY_COLOR = "#2a3340";
-const DESIGN_BLACK = "#3f4650";   // pure #000 filament would vanish on the panel background
-const LOW = 0.15;                 // one threshold: the card chip, the gate tiles and the picker must agree
-
-const num = v => (typeof v === "number" && Number.isFinite(v) ? v : null);
-
-/** Spoolman/Happy Hare colours are bare hex ("FFC72C"); returns a css colour, or null when unset. */
-function swatch(hex) {
-  const h = String(hex || "").replace(/^#/, "").replace(/^0x/i, "").slice(0, 6);
-  if (!/^[0-9a-f]{6}$/i.test(h)) return null;
-  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b < 24 ? DESIGN_BLACK : "#" + h.toLowerCase();
-}
-const grams = w => (w === null ? "—" : w >= 1000 ? (w / 1000).toFixed(2) + " kg" : w >= 100 ? Math.round(w) + " g" : w.toFixed(1) + " g");
-const metres = mm => (mm === null ? "—" : (mm / 1000).toFixed(1) + " m");
-/** Spoolman timestamps are ISO strings; fmtDate wants unix seconds. */
-const when = iso => { const t = Date.parse(iso || ""); return Number.isFinite(t) ? fmtDate(t / 1000) : "—"; };
-const spoolName = sp => ((sp && sp.filament && sp.filament.name) || (sp && sp.filament && sp.filament.material) || "—");
-/** remaining / initial, 0..1, or null when Spoolman has no weights for this spool. */
-function fillOf(sp) {
-  const total = num(sp && sp.initial_weight) ?? num(sp && sp.filament && sp.filament.weight);
-  const left = num(sp && sp.remaining_weight);
-  return total && left !== null ? Math.max(0, Math.min(1, left / total)) : null;
-}
+// Spool formatting (swatch / grams / metres / fillOf / LOW ...) is shared with the gate editor —
+// see lib/spools.js. Only the date wrapper stays local, because it composes the design's fmtDate.
+const when = iso => { const t = whenSeconds(iso); return t === null ? "—" : fmtDate(t); };
 
 export default function Page({ store, api }) {
   const st = useStore(store);
   const [pickerOpen, setPickerOpen] = usePersisted("spoolman.picker", false);
   const [q, setQ] = usePersisted("spoolman.q", "");
   const [pending, setPending] = React.useState(null);   // spool awaiting the mid-print confirm
+  const [editGate, setEditGate] = React.useState(null); // gate whose "change filament" dialog is open
   const [frame, setFrame] = React.useState(0);          // bumped to remount the iframe (RELOAD)
 
   const say = React.useCallback((message, type) => {
@@ -72,27 +55,22 @@ export default function Page({ store, api }) {
     };
   }), [st.connected]);
 
-  // The whole spool list (~40 spools): it names the gate spools the store has not cached yet and
-  // backs the picker. Fetched on entering this page only — never at app boot.
-  const list = useAsync(() => api.spoolman("/spool"), [st.connected]);
-  const all = Array.isArray(list.data) ? list.data : [];
-
-  // STORE WINS. `all` is the snapshot taken when this page was opened and is never re-fetched on its
-  // own, while boot.js re-reads the gate + active spools every 60 s — so for exactly the spools this
-  // page shows big (the card, the gate strip) the store copy is the fresher one. Merging the list
-  // last pinned remaining_weight to the page-entry value for as long as the page stayed open, which
-  // during a print is the number that moves.
-  const byId = React.useMemo(() => {
-    const m = {};
-    for (const sp of all) if (sp && sp.id) m[sp.id] = sp;
-    return Object.assign(m, st.spools || {});
-  }, [st.spools, list.data]);
+  // The whole spool list (~40 spools): names the gate spools the store has not cached yet and backs
+  // the picker. Shared with the gate editor — the fetch, the merge and the "store wins" rule are in
+  // lib/spools.js so both surfaces show the same numbers.
+  const list = useSpoolList(api, st);
+  const all = list.all, byId = list.byId;
 
   const activeId = st.activeSpool || null;
   // The list covers the active spool once loaded; this carries the first paint (and an archived
   // spool, which /spool omits).
   const one = useAsync(() => (activeId && !((st.spools || {})[activeId]) ? api.spoolman("/spool/" + activeId) : Promise.resolve(null)), [activeId, st.connected]);
   const active = (activeId && byId[activeId]) || (one.data && one.data.id === activeId ? one.data : null);
+
+  // Pages receive { store, api, route, navigate } but no action set, so the gate editor's actions are
+  // built here. makeMmuActions is a stateless factory over (api, store, log) — one implementation,
+  // called from both surfaces, which is why this is not a duplicate of the dashboard's copy.
+  const mmuAct = React.useMemo(() => makeMmuActions({ api, store, log: say }), [api, store, say]);
 
   const raw = st.raw || {};
   const mmu = raw.mmu || null;
@@ -139,16 +117,10 @@ export default function Page({ store, api }) {
 
   // ---- picker rows: active first, then the spools sitting in a gate, then the rest
   const needle = String(q || "").trim().toLowerCase();
-  const rows = React.useMemo(() => {
-    const rank = sp => (sp.id === activeId ? 0 : gateIds.indexOf(sp.id) >= 0 ? 1 : 2);
-    return all
-      .filter(sp => {
-        if (!needle) return true;
-        const f = sp.filament || {};
-        return `${sp.id} ${f.name || ""} ${f.material || ""} ${(f.vendor || {}).name || ""}`.toLowerCase().includes(needle);
-      })
-      .sort((a, b) => rank(a) - rank(b) || a.id - b.id);
-  }, [list.data, needle, activeId, mmu && mmu.gate_spool_id]);
+  const rows = React.useMemo(
+    () => filterSpools(all, needle, { activeId, gateIds }),
+    [list.data, needle, activeId, mmu && mmu.gate_spool_id]
+  );
 
   const cols = [
     { k: "id", label: "ID", w: "52px", render: r => <span style={S(`color:${r.id === activeId ? T.ok : T.mute}`)}>{"#" + r.id}</span> },
@@ -255,6 +227,12 @@ export default function Page({ store, api }) {
                 {/* the strip is where a nearly-empty gate has to be spotted, so it warns on the same
                     threshold as the card's LOW chip — it used to render 5% exactly like 97%. */}
                 <Val size={9} color={f !== null && f < LOW ? T.warn : T.mute} style="margin-left:auto">{f === null ? (id ? "#" + id : "—") : Math.round(f * 100) + "%"}</Val>
+                {/* The tile's own onClick sets the spool ACTIVE, so this swallows the event. Same dialog
+                    the dashboard spool cards open — lib/GateEditor.jsx, mounted once per surface. */}
+                <Hv as="div" title={"Change the filament in gate " + g}
+                  onClick={e => { if (e && e.stopPropagation) e.stopPropagation(); setEditGate(g); }}
+                  style={`cursor:pointer; padding:0 2px; border-radius:2px; ${mono(9, `color:${T.faint}`)}`}
+                  hover={`background:${T.panel2}; color:${T.text}`}>{"\u270e"}</Hv>
               </Row>
               <div style={S(`height:4px; border-radius:2px; background:${color}`)} />
               <div style={S(`${mono(10, `color:${T.body}`)}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap`)}>{name}</div>
@@ -328,5 +306,9 @@ export default function Page({ store, api }) {
         </div>
       )}
     </Panel>
+
+    {/* The one gate editor in the build (lib/GateEditor.jsx); the dashboard mounts the same component. */}
+    <GateEditor open={editGate !== null} gate={editGate} store={store} api={api}
+      act={mmuAct} onClose={() => setEditGate(null)} />
   </div>;
 }

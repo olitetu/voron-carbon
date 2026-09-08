@@ -233,6 +233,26 @@ elif "{V.jobProgressPct}" in src:
 else:
     failed.append('progress pct: could not anchor {"50"} near the progress ring')
 
+# ---- spool card: "change filament" button ----
+# The gate's filament is edited in lib/GateEditor.jsx (Spoolman-authoritative). The design had no
+# affordance for it: the gate map was only reachable by opening Mainsail's MMU panel in a new tab, which
+# is inert inside Orca's webview and a dependency on the very app Carbon replaces.
+# sp.edit stops propagation — the whole card is one onClick that SELECTS the gate.
+# GUARDED, not a PATCHES entry: the replacement contains the needle, so a count-based rule would
+# re-inject on every run (it did exactly that once).
+if "sp.edit" not in src:
+    needle = "onClick={sp.go} style={S(sp.cardStyle)}>"
+    n = src.count(needle)
+    if n == 1:
+        btn = ('{sp.edit ? <Hv as="div" onClick={sp.edit} title={sp.editTitle} style={sp.editStyle} '
+               'hover="background:#1d2734; color:#e8eef6">{"\u270e"}</Hv> : null}')
+        src = src.replace(needle, needle + btn, 1)
+        applied.append("spool card edit button (1x)")
+    else:
+        failed.append(f"spool card edit button: found {n} occurrence(s) of the card onClick, expected 1")
+else:
+    applied.append("spool card edit button (already patched)")
+
 # ---- job thumbnail: inject an <img> into the GCODE THUMBNAIL placeholder box ----
 if "V.jobThumb" not in src:
     m = re.search(r'(<div style=\{S\("[^"]*")(\)\}>)((?:(?!</div>).){0,160}?\{"GCODE THUMBNAIL"\})', src, re.S)

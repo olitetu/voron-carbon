@@ -143,6 +143,10 @@ export function jobVals(ctx) {
   const paused = printState === "paused" || !!(raw.pause_resume || {}).is_paused;
   const printing = printState === "printing" && !paused;
   const active = printing || paused;
+  // Klipper parks the state at complete / cancelled / error and virtual_sdcard keeps the file, so the
+  // panel goes on showing a job that is over. Both spellings: Klipper emits "cancelled", but the
+  // OctoPrint-compat layer and some plugins report "canceled".
+  const finished = ["complete", "cancelled", "canceled", "error"].indexOf(printState) >= 0;
   const shutdown = klippy === "shutdown" || klippy === "error";
   const disconnected = klippy === "disconnected";
   const estop = shutdown || disconnected;   // the design's S.estop: red pulsing status + RESTART button
@@ -266,12 +270,17 @@ export function jobVals(ctx) {
       stat("ETA", etaDate ? fmtClock12(etaDate) : null),
     ],
     jobActions: [
-      { t: paused ? "RESUME" : "PAUSE", go: () => (paused ? act.printResume() : act.printPause()) },
+      // Slot 1 is pause/resume WHILE a job runs and CLEAR once one has finished: pausing a completed
+      // print is meaningless, and the grid is a fixed 3 columns, so the finished state reuses the slot
+      // rather than adding a fourth button.
+      finished
+        ? { t: "CLEAR", go: () => act.printClear() }
+        : { t: paused ? "RESUME" : "PAUSE", go: () => (paused ? act.printResume() : act.printPause()) },
       { t: ui.confirmCancel ? "CONFIRM?" : "CANCEL", go: () => (ui.confirmCancel ? doCancel() : active ? armCancel() : act.printCancel()) },
       { t: "OBJECTS", go: () => set({ excludeOpen: true }) },
     ].map(a => Object.assign(a, {
       style: "background:#0d121a; padding:9px 0; text-align:center; font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.1em; cursor:pointer; color:" +
-        (a.t === "CONFIRM?" ? "#f0b429" : a.t === "CANCEL" ? "#8b98aa" : "#c9d3e0") + press
+        (a.t === "CONFIRM?" ? "#f0b429" : a.t === "CLEAR" ? "#3ddcc4" : a.t === "CANCEL" ? "#8b98aa" : "#c9d3e0") + press
     })),
     // header / thumbnail-overlay values that are static text in Template.jsx (integrator binds these)
     jobFileName: filename ? baseName(filename) : DASH,                 // top bar: "Lightbox_Draft_ABS_9h28m.gcode"
