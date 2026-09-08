@@ -1,14 +1,59 @@
 # Voron Carbon
 
-A complete Klipper/Moonraker frontend, built from the Claude Design mockup in `design-src/`. It replaces Mainsail
-page for page in the design's visual language; Mainsail stays installed and both are reachable at once.
+Voron Carbon is a standalone Happy Hare front end for Voron printers running Klipper and Moonraker. It provides
+a focused printer and MMU dashboard while leaving Mainsail or Fluidd installed and reachable alongside it.
 
 Nine pages: **dashboard · console · webcam · spoolman · heightmap · files · viewer · history · config · machine**.
+
+## Install over SSH
+
+On a printer host that already runs Moonraker and nginx, these steps install Carbon on port **8767** without
+replacing your existing web interface. Replace `PI_USER` with the Linux user on your printer host (often `pi`)
+and `PRINTER_HOST` with its hostname or IP address.
+
+1. From a terminal on your computer, connect to the printer host:
+
+   ```bash
+   ssh PI_USER@PRINTER_HOST
+   ```
+
+2. Clone Voron Carbon on the printer host:
+
+   ```bash
+   git clone https://github.com/olitetu/voron-carbon.git "$HOME/voron-carbon"
+   cd "$HOME/voron-carbon"
+   ```
+
+3. Run the installer and follow its confirmation prompt:
+
+   ```bash
+   bash tools/install.sh --root "$PWD/dist"
+   ```
+
+   The installer checks nginx and Moonraker, validates the generated nginx configuration before enabling it,
+   and leaves your existing Mainsail or Fluidd site untouched. To preview every change first, add `--dry-run`.
+
+4. Open Carbon in a browser:
+
+   ```text
+   http://PRINTER_HOST:8767/
+   ```
+
+To update this checkout later, SSH to the printer again and run:
+
+```bash
+cd "$HOME/voron-carbon"
+git pull --ff-only
+```
+
+## Dashboard
+
+![Voron Carbon main dashboard](design-src/pasted-1788391048426-0.png)
 
 ## Layout
 
 ```
-design-src/          the original Claude Design export (template, logic, runtime, screenshots) — reference only
+design-src/          the original design export (template, logic, runtime, screenshots) — reference only
 src/lib/
   moonraker.js       WebSocket JSON-RPC + REST client
   store.js           observable store; `raw` mirrors Moonraker's printer objects (deep-merged)
