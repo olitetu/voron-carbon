@@ -23,8 +23,7 @@ alongside Mainsail or Fluidd without replacing either one.
 - A Voron printer host running Klipper, Moonraker and nginx
 - Happy Hare installed and configured for MMU functionality
 - SSH access to the printer host
-- Git installed on the printer host
-- Node.js 18 or newer and npm installed on the printer host
+- Git and curl installed on the printer host
 
 ### Install over SSH
 
@@ -38,7 +37,17 @@ or IP address.
    ssh PI_USER@PRINTER_HOST
    ```
 
-2. Clone Voron Carbon into your home directory:
+2. Install Node.js 22 for your printer user. If `node --version` already reports version 18 or newer, skip this
+   step.
+
+   ```bash
+   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.6/install.sh | bash
+   export NVM_DIR="$HOME/.nvm"
+   [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+   nvm install 22
+   ```
+
+3. Clone Voron Carbon into your home directory:
 
    ```bash
    cd "$HOME"
@@ -46,14 +55,14 @@ or IP address.
    cd "$HOME/voron-carbon"
    ```
 
-3. Install the build dependencies and create the frontend files:
+4. Install the build dependencies and create the frontend files:
 
    ```bash
    npm ci
    npm run build
    ```
 
-4. Run the installer and follow its confirmation prompt:
+5. Run the installer and follow its confirmation prompt:
 
    ```bash
    bash tools/install.sh --root "$PWD/dist"
@@ -62,7 +71,7 @@ or IP address.
    The installer checks nginx and Moonraker, validates the generated nginx configuration before enabling it,
    and leaves your existing Mainsail or Fluidd site untouched. To preview every change first, add `--dry-run`.
 
-5. When the checks pass, open Carbon in a browser:
+6. When the checks pass, open Carbon in a browser:
 
    ```text
    http://PRINTER_HOST:8767/
@@ -107,7 +116,7 @@ src/pages/<page>/    the other eight pages
 src/viewer/          entry for the lazily-loaded 3D G-code bundle (gcode-preview + three)
 src/editor/          entry for the lazily-loaded CodeMirror 6 bundle + the Klipper/Jinja language mode
 vendor/              React 18.3.1 UMD — no runtime internet dependency (fonts are vendored into dist/ too)
-dist/                build output; this is what runs on the printer. Committed on purpose — see below.
+dist/                generated build output; this is what runs on the printer and ships in releases
 tools/               see "Tooling"
 CONTRACT.md          the authoritative spec (store shape, API, exact gcode per action, page parity)
 ```
@@ -265,8 +274,8 @@ Two rules that are easy to get wrong:
   (every `MMU_*`). `has()` returns `null` when the catalogue has not loaded yet — treat that as *available*, not
   absent, or the UI greys itself out during startup.
 
-## Why `dist/` is committed
+## Why `dist/` is not committed
 
-The printer pulls prebuilt files, so it needs no Node or npm toolchain to update, and a deploy is a file copy
-rather than a build. Source maps are `.gitignore`d — they are 5.9 MB of the 7.8 MB output and the printer never
-reads them.
+Source builds generate `dist/` locally. Release builds package the same output in `voron-carbon.zip`, allowing
+release-based installations to update without keeping Node or npm on the printer. The directory and source maps
+stay out of Git so generated bundles cannot drift from their source or create noisy minified-code conflicts.
