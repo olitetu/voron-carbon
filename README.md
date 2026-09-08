@@ -1,15 +1,35 @@
 # Voron Carbon
 
-Voron Carbon is a standalone Happy Hare front end for Voron printers running Klipper and Moonraker. It provides
-a focused printer and MMU dashboard while leaving Mainsail or Fluidd installed and reachable alongside it.
+Voron Carbon is a standalone web interface for Klipper-powered Voron printers running
+[Happy Hare](https://github.com/moggieuk/Happy-Hare). It brings printer controls, print status, webcam,
+Spoolman and MMU operation together in one dense dashboard. Carbon connects directly to Moonraker and runs
+alongside Mainsail or Fluidd without replacing either one.
 
-Nine pages: **dashboard · console · webcam · spoolman · heightmap · files · viewer · history · config · machine**.
+![Voron Carbon main dashboard](docs/images/dashboard.png)
 
-## Install over SSH
+## Features
 
-On a printer host that already runs Moonraker and nginx, these steps install Carbon on port **8767** without
-replacing your existing web interface. Replace `PI_USER` with the Linux user on your printer host (often `pi`)
-and `PRINTER_HOST` with its hostname or IP address.
+- Happy Hare status, gate and tool mapping, filament path, recovery actions and MMU controls
+- Dashboard controls for the toolhead, extruder, temperatures, fans, LEDs, macros and active print
+- Dedicated console, webcam, Spoolman, heightmap, file, G-code viewer, history, config and machine pages
+- Direct Moonraker WebSocket and REST integration
+- OrcaSlicer Device-tab support
+- Self-contained frontend with no runtime internet dependency
+
+## Installation
+
+### Requirements
+
+- A Voron printer host running Klipper, Moonraker and nginx
+- Happy Hare installed and configured for MMU functionality
+- SSH access to the printer host
+- Git installed on the printer host
+
+### Install over SSH
+
+The commands below install Carbon on port **8767** and leave your existing web interface unchanged. Replace
+`PI_USER` with the Linux user on your Raspberry Pi or other printer host, and `PRINTER_HOST` with its hostname
+or IP address.
 
 1. From a terminal on your computer, connect to the printer host:
 
@@ -17,10 +37,11 @@ and `PRINTER_HOST` with its hostname or IP address.
    ssh PI_USER@PRINTER_HOST
    ```
 
-2. Clone Voron Carbon on the printer host:
+2. Clone Voron Carbon into your home directory:
 
    ```bash
-   git clone https://github.com/olitetu/voron-carbon.git "$HOME/voron-carbon"
+   cd "$HOME"
+   git clone https://github.com/olitetu/voron-carbon.git
    cd "$HOME/voron-carbon"
    ```
 
@@ -33,22 +54,24 @@ and `PRINTER_HOST` with its hostname or IP address.
    The installer checks nginx and Moonraker, validates the generated nginx configuration before enabling it,
    and leaves your existing Mainsail or Fluidd site untouched. To preview every change first, add `--dry-run`.
 
-4. Open Carbon in a browser:
+4. When the checks pass, open Carbon in a browser:
 
    ```text
    http://PRINTER_HOST:8767/
    ```
 
-To update this checkout later, SSH to the printer again and run:
+### Updating
+
+SSH to the printer host again, pull the latest version and rerun the installer:
 
 ```bash
 cd "$HOME/voron-carbon"
 git pull --ff-only
+bash tools/install.sh --root "$PWD/dist"
 ```
 
-## Dashboard
-
-![Voron Carbon main dashboard](design-src/pasted-1788391048426-0.png)
+The installer validates the new nginx configuration before reloading nginx. Carbon is static, so no Klipper or
+Moonraker restart is required.
 
 ## Layout
 
@@ -131,23 +154,9 @@ is unconditionally same-origin.
 Dev handles in the browser console: `window.__V` (the whole dashboard view-model), `window.__carbon`
 (`{api, store, geometry, travelForMm, act}`), `window.__perf`.
 
-## Deploy to the printer
+## Development deployment
 
-**Install (any printer).** Download `voron-carbon.zip` from a release, unpack it on the printer, and run the
-installer that ships inside it:
-
-```bash
-mkdir -p ~/printer_data/carbon && cd ~/printer_data/carbon
-unzip -o ~/voron-carbon.zip
-bash tools/install.sh                  # --dry-run first if you want to read the config it generates
-```
-
-It auto-detects your nginx layout, Moonraker port and install directory, generates a config from those,
-validates with `nginx -t` **before** enabling anything, and backs itself out completely if the test fails. It
-never edits a file it did not create and never changes permissions behind your back. `--help` lists the flags
-(`--port`, `--moonraker-port`, `--webcam-port`, `--root`).
-
-**Development builds.** To push a work-in-progress build without cutting a release:
+To push a work-in-progress build without changing the installed checkout:
 
 ```bash
 export CARBON_PRINTER=http://myprinter.local     # once, in your shell profile
@@ -157,10 +166,10 @@ npm run build && python3 tools/deploy.py         # uploads over the Moonraker fi
 That lands in Moonraker's `config` root and is viewable at
 `<printer>/server/files/config/voron-ui/carbon/dist/index.html`, leaving the real install untouched.
 
-### Keeping it updated
+### Release-based updates
 
-Register Carbon with Moonraker's update manager and it updates itself from the MACHINE page, alongside
-Klipper and everything else. Append to `~/printer_data/config/moonraker.conf`, then restart Moonraker:
+Release archives are compatible with Moonraker's web updater. For an installation made from a release archive,
+append this block to `~/printer_data/config/moonraker.conf`, then restart Moonraker:
 
 ```ini
 [update_manager voron-carbon]
