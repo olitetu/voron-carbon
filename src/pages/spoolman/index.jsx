@@ -231,8 +231,8 @@ export default function Page({ store, api }) {
                     the dashboard spool cards open — lib/GateEditor.jsx, mounted once per surface. */}
                 <Hv as="div" title={"Change the filament in gate " + g}
                   onClick={e => { if (e && e.stopPropagation) e.stopPropagation(); setEditGate(g); }}
-                  style={`cursor:pointer; padding:0 2px; border-radius:2px; ${mono(9, `color:${T.faint}`)}`}
-                  hover={`background:${T.panel2}; color:${T.text}`}>{"\u270e"}</Hv>
+                  style={`cursor:pointer; padding:1px 3px; border-radius:2px; border:1px solid ${T.line2}; ${mono(10.5, `color:${T.dim}; line-height:1`)}`}
+                  hover={`background:${T.panel2}; color:${T.text}; border-color:#4a5666`}>{"\u270e"}</Hv>
               </Row>
               <div style={S(`height:4px; border-radius:2px; background:${color}`)} />
               <div style={S(`${mono(10, `color:${T.body}`)}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap`)}>{name}</div>

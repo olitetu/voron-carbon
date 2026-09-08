@@ -245,7 +245,7 @@ if "sp.edit" not in src:
     n = src.count(needle)
     if n == 1:
         btn = ('{sp.edit ? <Hv as="div" onClick={sp.edit} title={sp.editTitle} style={sp.editStyle} '
-               'hover="background:#1d2734; color:#e8eef6">{"\u270e"}</Hv> : null}')
+               'hover="background:#1d2734; color:#e8eef6; border-color:#4a5666">{"\u270e"}</Hv> : null}')
         src = src.replace(needle, needle + btn, 1)
         applied.append("spool card edit button (1x)")
     else:

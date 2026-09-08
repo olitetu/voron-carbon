@@ -152,8 +152,13 @@ export function mmuVals(ctx) {
     // selector. Bypass has no gate map entry, hence no button.
     edit: i < NUM_GATES ? (e => { if (e && e.stopPropagation) e.stopPropagation(); set({ gateEditor: i }); }) : null,
     editTitle: i < NUM_GATES ? "Change the filament in gate " + i : "",
+    // Contrast, not decoration: this shipped at 9px in #4d5a6b, which is 2.67:1 on the card ground and
+    // effectively invisible — the same ratio the owner had already rejected for the temperature labels.
+    // An interactive control needs MORE contrast than body text, so it sits at T.dim (#8b98aa, 6.4:1)
+    // with a real border and a slightly larger glyph. The card is only ~65px wide at narrow widths, so
+    // a corner control is the only affordance that fits; it has to be legible rather than subtle.
     editStyle: i < NUM_GATES
-      ? "position:absolute; top:3px; right:3px; width:15px; height:15px; display:flex; align-items:center; justify-content:center; border-radius:3px; cursor:pointer; font-family:'JetBrains Mono',monospace; font-size:9px; color:#4d5a6b; background:rgba(13,18,26,.75)"
+      ? "position:absolute; top:3px; right:3px; width:17px; height:17px; display:flex; align-items:center; justify-content:center; border-radius:3px; border:1px solid #2c3746; cursor:pointer; font-family:'JetBrains Mono',monospace; font-size:11px; line-height:1; color:#8b98aa; background:#141b25"
       : "display:none",
     color: s.color, op: s.op, pct: s.pct, name: s.name, mat: s.mat, gate: s.g,
     dash: `${(C * s.fill).toFixed(1)} ${C.toFixed(1)}`,
