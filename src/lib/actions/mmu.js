@@ -370,9 +370,34 @@ export function makeMmuActions({ api, store, log } = {}) {
     };
   }
 
+  /** Happy Hare's spoolman_support mode: off | readonly | push | pull (or null when config is unread). */
+  function spoolmanMode() {
+    const st = (raw().configfile || {}).settings || {};
+    const v = (st.mmu || {}).spoolman_support;
+    return v === undefined || v === null ? null : String(v).toLowerCase();
+  }
+
   /**
    * Point a gate at a Spoolman spool, or clear it with spoolId == null.
-   * The write lands in the Spoolman DB; HH's gate map follows from there.
+   *
+   * WHICH COMMAND depends on spoolman_support, and getting this wrong is silent:
+   *
+   *   pull  — Spoolman owns the gate map. `MMU_SPOOLMAN GATE=n SPOOLID=x` writes the remote record and
+   *           HH follows it (_spoolman_set_spool_gate is called with sync=True in this mode).
+   *
+   *   push / readonly / off — HH owns the gate map and pushes it OUT to Spoolman. Here the write must go
+   *           to the LOCAL map via `MMU_GATE_MAP GATE=n SPOOLID=x`. Using MMU_SPOOLMAN in push mode looks
+   *           like it works — Spoolman logs "Spool 24 assigned ... @ gate 3" — but sync is False, so HH's
+   *           own map is untouched, and the next refresh/sync pushes HH's (unchanged) map back out and
+   *           UNDOES the assignment: "Spool 24 unassigned from printer voron and gate 3". Verified live.
+   *
+   * Identity still comes from Spoolman either way: changing SPOOLID makes HH fetch that spool's record and
+   * overwrite the gate's name / material / colour / temperature from it — measured, it replaced a passed
+   * TEMP=200 with the spool's own 250 C. So nothing here types filament attributes in by hand.
+   *
+   * TEMP is passed because omitting it rewrites the gate to default_extruder_temp; see setGateLocal.
+   * Clearing uses SPOOLID=-1 (GATE_MAP accepts minval=-1; note SPOOLID=0 would fall through to the
+   * existing value because HH does `spool_id or self.gate_spool_id[gate]`).
    */
   async function assignSpool(gate, spoolId) {
     if (blocked()) return false;
@@ -380,16 +405,31 @@ export function makeMmuActions({ api, store, log } = {}) {
     if (g === null) { say("Refused — gate " + gate + " is out of range", "warn"); return false; }
     if (busy("Spool assignment")) return false;
 
+    const pull = spoolmanMode() === "pull";
+    const cur = gateAttrs(g);
+    const temp = cur.temp > 0 ? cur.temp : (tempFloor() || 0);
+    const tempArg = temp > 0 ? " TEMP=" + temp : "";
+
     if (spoolId === null || spoolId === undefined || spoolId === "") {
-      say("MMU_SPOOLMAN GATE=" + g + " — clearing the spool assignment in Spoolman", "warn");
-      return run("MMU_SPOOLMAN GATE=" + g, "Gate " + g + " spool cleared");
+      if (pull) {
+        say("MMU_SPOOLMAN GATE=" + g + " — clearing the spool assignment in Spoolman", "warn");
+        return run("MMU_SPOOLMAN GATE=" + g, "Gate " + g + " spool cleared");
+      }
+      say("MMU_GATE_MAP GATE=" + g + " SPOOLID=-1 — clearing the spool on gate " + g, "warn");
+      return run("MMU_GATE_MAP GATE=" + g + " SPOOLID=-1" + tempArg, "Gate " + g + " spool cleared");
     }
+
     const id = Math.round(Number(spoolId));
     if (!Number.isFinite(id) || id < 1) { say("Refused — '" + spoolId + "' is not a Spoolman spool id (must be >= 1)", "warn"); return false; }
     const sp = (state().spools || {})[id];
     const label = (sp && sp.filament && (sp.filament.name || sp.filament.material)) || ("spool #" + id);
-    say("MMU_SPOOLMAN GATE=" + g + " SPOOLID=" + id + " — assigning " + label + " in Spoolman");
-    return run("MMU_SPOOLMAN GATE=" + g + " SPOOLID=" + id, "Gate " + g + " -> spool #" + id);
+
+    if (pull) {
+      say("MMU_SPOOLMAN GATE=" + g + " SPOOLID=" + id + " — assigning " + label + " in Spoolman");
+      return run("MMU_SPOOLMAN GATE=" + g + " SPOOLID=" + id, "Gate " + g + " -> spool #" + id);
+    }
+    say("MMU_GATE_MAP GATE=" + g + " SPOOLID=" + id + " — assigning " + label + " (attributes follow from Spoolman)");
+    return run("MMU_GATE_MAP GATE=" + g + " SPOOLID=" + id + tempArg, "Gate " + g + " -> spool #" + id);
   }
 
   /**

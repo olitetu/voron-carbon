@@ -5,8 +5,16 @@
 //
 // SPOOLMAN IS THE SOURCE OF TRUTH. Filament identity — name, material, colour, temperature, weights,
 // usage — belongs to the spool record, so all of it is REFLECTED read-only here. The only write that
-// touches identity is choosing which spool sits in the gate, and that goes through Spoolman
-// (`MMU_SPOOLMAN GATE=n SPOOLID=x`), never by typing a name into Happy Hare's local map.
+// touches identity is choosing which spool sits in the gate, and even then no attribute is typed in:
+// changing the spool makes Happy Hare fetch that spool's record and overwrite the gate's name /
+// material / colour / temperature from it (measured live: it replaced a passed TEMP=200 with the
+// spool's own 250 C).
+//
+// Which command carries that assignment depends on spoolman_support and is NOT obvious — see
+// assignSpool() in lib/actions/mmu.js. Short version: in `pull` mode it goes through MMU_SPOOLMAN; in
+// `push` mode (this printer) it must go to the LOCAL map via MMU_GATE_MAP, because MMU_SPOOLMAN there
+// writes only the remote record and the next sync pushes HH's unchanged map back out, silently undoing
+// the assignment.
 //
 // Two attributes are genuinely local to Happy Hare and editable here — HH's own source says so
 // ("gate_speed_override and gate_status can be set locally"):
