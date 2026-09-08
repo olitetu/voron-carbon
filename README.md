@@ -24,6 +24,7 @@ alongside Mainsail or Fluidd without replacing either one.
 - Happy Hare installed and configured for MMU functionality
 - SSH access to the printer host
 - Git installed on the printer host
+- Node.js 18 or newer and npm installed on the printer host
 
 ### Install over SSH
 
@@ -45,7 +46,14 @@ or IP address.
    cd "$HOME/voron-carbon"
    ```
 
-3. Run the installer and follow its confirmation prompt:
+3. Install the build dependencies and create the frontend files:
+
+   ```bash
+   npm ci
+   npm run build
+   ```
+
+4. Run the installer and follow its confirmation prompt:
 
    ```bash
    bash tools/install.sh --root "$PWD/dist"
@@ -54,7 +62,7 @@ or IP address.
    The installer checks nginx and Moonraker, validates the generated nginx configuration before enabling it,
    and leaves your existing Mainsail or Fluidd site untouched. To preview every change first, add `--dry-run`.
 
-4. When the checks pass, open Carbon in a browser:
+5. When the checks pass, open Carbon in a browser:
 
    ```text
    http://PRINTER_HOST:8767/
@@ -67,6 +75,8 @@ SSH to the printer host again, pull the latest version and rerun the installer:
 ```bash
 cd "$HOME/voron-carbon"
 git pull --ff-only
+npm ci
+npm run build
 bash tools/install.sh --root "$PWD/dist"
 ```
 

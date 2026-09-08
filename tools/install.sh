@@ -109,6 +109,7 @@ if [ -z "$ROOT" ]; then
   done
   [ -n "$ROOT" ] || fail "Could not find Carbon's index.html. Pass --root /path/to/carbon"
 fi
+[ -d "$ROOT" ] || fail "$ROOT does not exist. Build Carbon first with: npm ci && npm run build"
 ROOT="$(cd "$ROOT" && pwd)"
 [ -f "$ROOT/index.html" ] || fail "$ROOT/index.html does not exist — is --root right?"
 say "Carbon files: $ROOT"
