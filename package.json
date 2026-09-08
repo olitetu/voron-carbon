@@ -1,0 +1,1 @@
+{"name":"voron-carbon","private":true,"type":"module","scripts":{"build":"node build.mjs","watch":"node build.mjs --watch","postinstall":"python3 tools/patch_gcode_preview.py"},"devDependencies":{"@codemirror/legacy-modes":"^6.5.4","codemirror":"^6.0.2","esbuild":"^0.28.2","gcode-preview":"^3.0.0-alpha.5","three":"^0.185.1"}}

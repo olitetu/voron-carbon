@@ -1,0 +1,72 @@
+name: Release
+
+# Triggered by hand — from the Actions tab, or `tools/release.sh v1.2.0`.
+#
+# Deliberately NOT on tag push: CI builds from the branch as GitHub has it, so releasing is a separate,
+# explicit act rather than a side effect of tagging. The build always comes from a clean checkout, which
+# makes it structurally impossible to ship something that only exists on someone's laptop.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, e.g. v1.2.0 (becomes the tag, the release name, and release_info.json)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as a pre-release (the printer will NOT offer it on the stable channel)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write        # needed to create the tag and the release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Validate the version string
+        run: |
+          case "${{ inputs.version }}" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::version must look like v1.2.3, got '${{ inputs.version }}'"; exit 1 ;;
+          esac
+          if gh release view "${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "::error::release ${{ inputs.version }} already exists"; exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Stamp the version and package
+        run: |
+          rm -f dist/*.map                       # 5.9 MB of a 7.8 MB build; the printer never reads them
+          cp -r tools dist/tools                 # install.sh has to ship INSIDE the release
+          bash tools/stamp_release_info.sh "${{ inputs.version }}" dist
+          # Contents at the ARCHIVE ROOT: Moonraker extracts entries verbatim into the install directory,
+          # so a dist/ prefix would nest the whole app one level too deep.
+          # Use the zip CLI, not Python's zipfile: Moonraker chmods each extracted file to the mode stored
+          # in the archive, and ZipFile.writestr() stores 0600 — which makes nginx 403 the entire app.
+          cd dist && zip -qr ../voron-carbon.zip . -x '*.DS_Store' && cd ..
+          unzip -l voron-carbon.zip | head -20
+          test -f dist/release_info.json
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: ${{ inputs.version }}          # MUST equal the tag — Moonraker compares the NAME
+          prerelease: ${{ inputs.prerelease }}
+          files: voron-carbon.zip              # exactly ONE asset; Moonraker takes assets[0] otherwise
+          generate_release_notes: true
+          fail_on_unmatched_files: true

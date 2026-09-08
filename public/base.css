@@ -1,0 +1,22 @@
+/* from the design export <style> */
+html, body { margin:0; padding:0; background:#06080b; }
+  * { box-sizing: border-box; }
+  a { color:#ff5a33; text-decoration:none; }
+  a:hover { color:#ff8266; }
+  ::-webkit-scrollbar { width:6px; height:6px; }
+  ::-webkit-scrollbar-thumb { background:#25303f; border-radius:3px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  @keyframes vFlow { to { stroke-dashoffset: -240; } }
+  @keyframes vFlowRoute { to { stroke-dashoffset: -0.034; } }
+  @keyframes vFlowH { to { background-position: 13px 0; } }
+  @keyframes vBlade { 0% { transform:translateX(-30px); } 30% { transform:translateX(-3px); } 42% { transform:translateX(0); } 55% { transform:translateX(-1px); } 78% { transform:translateX(-30px); } 100% { transform:translateX(-30px); } }
+  @keyframes vFlash { 0%,38% { opacity:0; } 44% { opacity:1; } 62% { opacity:0; } 100% { opacity:0; } }
+  @keyframes vStub { 0%,40% { transform:translate(0,0); opacity:1; } 44% { opacity:1; } 76% { transform:translate(4px,26px) rotate(24deg); opacity:0; } 100% { opacity:0; } }
+  @keyframes vShear { 0%,40% { transform:translateX(0); } 48% { transform:translateX(3px); } 100% { transform:translateX(3px); } }
+  @keyframes vPulse { 0%,100% { opacity:1; } 50% { opacity:.28; } }
+  @keyframes vGlow { 0%,100% { box-shadow:0 0 0 0 rgba(255,90,51,.45); } 50% { box-shadow:0 0 0 5px rgba(255,90,51,0); } }
+  @keyframes vScan { 0% { transform:translateY(-100%); } 100% { transform:translateY(1400%); } }
+  @keyframes vSpin { to { transform:rotate(360deg); } }
+  @keyframes vDraw { from { stroke-dashoffset:1400; } to { stroke-dashoffset:0; } }
+  @keyframes vBlink { 0%,45% { opacity:1; } 50%,95% { opacity:.15; } }
+  @keyframes vRise { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }

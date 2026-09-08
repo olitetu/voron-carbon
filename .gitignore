@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Build output. NOT committed: releases carry a prebuilt zip built by CI from a clean checkout, so a
+# committed dist/ could only ever disagree with the released one — and a 400 KB single-line minified
+# bundle is the worst possible merge conflict.
+dist/
+
+# Source maps (5.9 MB of a 7.8 MB build; nothing reads them off the printer)
+*.map
+
+# Local scratch
+.DS_Store
+scratch/
+*.bak-local
