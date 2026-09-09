@@ -2,12 +2,15 @@
 // active spool and Happy Hare's gate → spool map. Spoolman is a separate service on its own port
 // and knows nothing about this printer's MMU, so the gate mapping only exists here.
 import React from "react";
-import { Panel, Btn, Chip, Label, Val, Row, Divider, Input, Table, Confirm, T, mono, fmtDate } from "../../lib/design.jsx";
+import { Panel, Btn, Chip, Label, Val, Row, Divider, Confirm, T, mono, fmtDate } from "../../lib/design.jsx";
 import { S, Hv } from "../../lib/ui.js";
 import { useStore, useAsync, usePersisted } from "../../lib/useStore.js";
+import { Modal } from "../../lib/design.jsx";
+import { makeSpoolman } from "../../lib/spoolmanApi.js";
+import { SpoolsTab, FilamentsTab, VendorsTab } from "./tabs.jsx";
 import GateEditor from "../../lib/GateEditor.jsx";
 import { makeMmuActions } from "../../lib/actions/mmu.js";
-import { useSpoolList, num, swatch, grams, metres, whenSeconds, spoolName, fillOf, filterSpools, EMPTY_COLOR, DESIGN_BLACK, LOW } from "../../lib/spools.js";
+import { useSpoolList, num, swatch, grams, metres, whenSeconds, spoolName, fillOf, EMPTY_COLOR, LOW } from "../../lib/spools.js";
 
 // Spoolman's address comes from moonraker.conf ([spoolman] server:). When that lookup fails, fall
 // back the way the contract does — Moonraker's own host on Spoolman's default port, never a literal
@@ -19,10 +22,12 @@ const when = iso => { const t = whenSeconds(iso); return t === null ? "—" : fm
 
 export default function Page({ store, api }) {
   const st = useStore(store);
-  const [pickerOpen, setPickerOpen] = usePersisted("spoolman.picker", false);
-  const [q, setQ] = usePersisted("spoolman.q", "");
   const [pending, setPending] = React.useState(null);   // spool awaiting the mid-print confirm
   const [editGate, setEditGate] = React.useState(null); // gate whose "change filament" dialog is open
+  const [tab, setTab] = usePersisted("spoolman.tab", "spools");
+  const [bandOpen, setBandOpen] = usePersisted("spoolman.band", true);
+  // The typed REST layer — same api object, so the same Moonraker proxy. See lib/spoolmanApi.js.
+  const sm = React.useMemo(() => makeSpoolman(api), [api]);
   const [frame, setFrame] = React.useState(0);          // bumped to remount the iframe (RELOAD)
 
   const say = React.useCallback((message, type) => {
@@ -116,33 +121,7 @@ export default function Page({ store, api }) {
   const refresh = () => { svc.reload(); list.reload(); one.reload(); };
 
   // ---- picker rows: active first, then the spools sitting in a gate, then the rest
-  const needle = String(q || "").trim().toLowerCase();
-  const rows = React.useMemo(
-    () => filterSpools(all, needle, { activeId, gateIds }),
-    [list.data, needle, activeId, mmu && mmu.gate_spool_id]
-  );
 
-  const cols = [
-    { k: "id", label: "ID", w: "52px", render: r => <span style={S(`color:${r.id === activeId ? T.ok : T.mute}`)}>{"#" + r.id}</span> },
-    {
-      k: "name", label: "FILAMENT", w: "minmax(0,2fr)", render: r => {
-        const g = gateIds.indexOf(r.id);
-        return <Row gap={7}>
-          <span style={S(`width:9px; height:9px; flex:none; border-radius:2px; border:1px solid ${T.line2}; background:${swatch((r.filament || {}).color_hex) || EMPTY_COLOR}`)} />
-          <span style={S("min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap")}>{spoolName(r)}</span>
-          {g >= 0 && <span style={S(`${mono(9, `color:${T.faint}`)}; flex:none`)}>{"@" + g}</span>}
-        </Row>;
-      },
-    },
-    { k: "mat", label: "MATERIAL", w: "minmax(0,1fr)", render: r => (r.filament || {}).material || "—" },
-    { k: "vendor", label: "VENDOR", w: "minmax(0,1fr)", render: r => ((r.filament || {}).vendor || {}).name || "—" },
-    {
-      k: "left", label: "REMAINING", w: "112px", align: "right", render: r => {
-        const f = fillOf(r), left = num(r.remaining_weight);
-        return <span style={S(`color:${f !== null && f < LOW ? T.warn : T.body}`)}>{grams(left)}{f === null ? "" : ` · ${Math.round(f * 100)}%`}</span>;
-      },
-    },
-  ];
 
   // ---- active spool card
   const fil = (active && active.filament) || {};
@@ -150,15 +129,40 @@ export default function Page({ store, api }) {
   const fill = fillOf(active);
   const totalW = num(active && active.initial_weight) ?? num(fil.weight);
 
-  return <div style={S("flex:1; display:grid; gap:10px; padding:10px; grid-template-columns:1fr; grid-template-rows:auto minmax(0,1fr); min-height:0")}>
+  // ---- one cohesive section ------------------------------------------------------------------------
+  // Was two stacked panels (ACTIVE SPOOL, then a full-height Spoolman iframe) — what the owner meant by
+  // "2 stacked on one another". Now a single panel: the printer band on top (the gate <-> spool bridge
+  // that Spoolman itself knows nothing about), then tabs. Native tabs are primary; Spoolman's own UI is
+  // the last tab because the corners deliberately NOT rebuilt — custom-field schema, external product
+  // catalogue, backup/export, settings — exist only there, and Orca's webview discards window.open /
+  // target=_blank, so linking out is not an option.
+  const TABS = [["spools", "SPOOLS"], ["filaments", "FILAMENTS"], ["vendors", "VENDORS"], ["ui", "SPOOLMAN UI"]];
+  const tabStyle = on => "padding:5px 11px; border-radius:3px; cursor:pointer; white-space:nowrap; " +
+    mono(9.5, "letter-spacing:.12em; color:" + (on ? T.text : T.mute)) + "; " +
+    (on ? "background:" + T.panel3 + "; border:1px solid " + T.line2 : "border:1px solid transparent");
+  const mappedGates = gateCount ? gateIds.slice(0, gateCount).filter(i => i > 0).length : 0;
 
-    <Panel title="ACTIVE SPOOL" right={<Row gap={8}>
-      <Chip color={svc.loading ? T.dim : online ? T.ok : T.warn} pulse={online}>{svc.loading ? "CHECKING" : online ? "CONNECTED" : "OFFLINE"}</Chip>
-      {!!(svc.data && svc.data.pending) && <Chip color={T.info}>{svc.data.pending + " QUEUED"}</Chip>}
-      <Btn small kind={pickerOpen ? "accent" : "default"} onClick={() => setPickerOpen(v => !v)}>{pickerOpen ? "CLOSE PICKER" : "SET ACTIVE"}</Btn>
-      <Btn small onClick={refresh}>REFRESH</Btn>
-    </Row>}>
+  return <div style={S("flex:1; min-height:0; display:flex; flex-direction:column; padding:10px")}>
+    <Panel title="SPOOLMAN" style="flex:1; min-height:0" bodyStyle="display:flex; flex-direction:column; min-height:0"
+      right={<Row gap={8}>
+        <Chip color={svc.loading ? T.dim : online ? T.ok : T.warn} pulse={online}>{svc.loading ? "CHECKING" : online ? "CONNECTED" : "OFFLINE"}</Chip>
+        {!!(svc.data && svc.data.pending) && <Chip color={T.info}>{svc.data.pending + " QUEUED"}</Chip>}
+        <Btn small onClick={refresh}>REFRESH</Btn>
+      </Row>}>
 
+      {/* printer band — collapsible, because on a short viewport (Orca's Device tab) it would leave
+          the table almost no room. */}
+      <Hv as="div" onClick={() => setBandOpen(v => !v)}
+        style={"display:flex; align-items:center; gap:8px; cursor:pointer; padding:1px 0 7px"}
+        hover={"color:" + T.text}>
+        <span style={S(mono(9, "color:" + T.faint) + "; width:10px")}>{bandOpen ? "\u25be" : "\u25b8"}</span>
+        <Label>THIS PRINTER</Label>
+        {!bandOpen ? <Val size={9.5} color={T.mute}>
+          {(activeId ? "ACTIVE #" + activeId + (active ? " · " + spoolName(active) : "") : "NO ACTIVE SPOOL")
+            + (gateCount ? " · " + mappedGates + "/" + gateCount + " GATES MAPPED" : "")}
+        </Val> : null}
+      </Hv>
+      {bandOpen ? <>
       {!activeId ? (
         <Row gap={10}>
           <div style={S(`width:44px; height:44px; flex:none; border-radius:4px; border:1px dashed ${T.line2}; background:${T.panel3}`)} />
@@ -194,7 +198,6 @@ export default function Page({ store, api }) {
           </div>
         </Row>
       )}
-
       {/* Gate → spool. Spoolman has no idea these gates exist; Happy Hare's arrays are the only source. */}
       <Divider />
       <Row gap={8} style="margin-bottom:6px">
@@ -245,43 +248,27 @@ export default function Page({ store, api }) {
           })}
         </div>
       )}
-
-      {pickerOpen && <>
         <Divider />
-        <Row gap={8}>
-          <Label>FILTER</Label>
-          <Input value={q} onChange={e => setQ(e.target.value)} placeholder="name · material · vendor · id" style="flex:1" />
-          <Val size={9.5} color={T.faint}>{rows.length + " / " + all.length}</Val>
-          {!!activeId && <Btn small kind="ghost" onClick={() => request(null)}>CLEAR ACTIVE</Btn>}
-        </Row>
-        <div style={S("max-height:230px; overflow:auto; margin-top:6px")}>
-          {list.loading ? <div style={S(`padding:14px 8px; ${mono(10, `color:${T.ghost}`)}`)}>LOADING SPOOLS …</div>
-            : list.error ? <Row gap={10} style="padding:12px 8px"><Val size={10.5} color={T.err}>{list.error}</Val><Btn small onClick={() => list.reload()}>RETRY</Btn></Row>
-              : <Table cols={cols} rows={rows} rowKey={r => r.id} onRow={r => request(r.id)}
-                empty={needle ? "NO SPOOL MATCHES" : "SPOOLMAN HAS NO SPOOLS"}
-                rowStyle={r => (r.id === activeId ? "background:#101821" : "")} />}
-        </div>
-      </>}
+      </> : null}
 
-      {/* Cancels the panel body's 10px 12px padding so the strip spans the panel like the design's. */}
-      {pending && <div style={S("margin:10px -12px -10px; overflow:hidden; border-radius:0 0 5px 5px")}>
-        <Confirm yes={pending.id ? "SET ACTIVE" : "CLEAR"}
-          text={pending.id
-            ? `A print is running. Set #${pending.id} · ${spoolName(byId[pending.id])} active? The rest of this job's filament is logged against it.`
-            : "A print is running. Clear the active spool? The rest of this job's filament use is not logged anywhere."}
-          onYes={() => { const p = pending; setPending(null); setActive(p.id); }}
-          onNo={() => setPending(null)} />
-      </div>}
-    </Panel>
+      <Row gap={4} style="flex-wrap:wrap; padding-bottom:8px">
+        {TABS.map(t => (
+          <Hv key={t[0]} as="div" onClick={() => setTab(t[0])} style={tabStyle(tab === t[0])}
+            hover={tab === t[0] ? "" : "background:" + T.panel2 + "; color:" + T.text}>{t[1]}</Hv>
+        ))}
+      </Row>
 
-    {/* min-height only has to keep the frame usable when the row above is tall; 420 forced the whole
-        app to grow a page scrollbar on any viewport under ~740 px (Orca's Device tab is short). The
-        minmax(0,1fr) row still grows the frame past this on a normal screen. */}
-    <Panel title="SPOOLMAN" flat style="min-height:360px" bodyStyle="display:flex"
-      right={<Row gap={8}>
-        <Val size={9} color={T.faint} style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{url}</Val>
-        <Btn small onClick={() => setFrame(n => n + 1)} disabled={!online || mixed}>RELOAD</Btn>
-      </Row>}>
+      <div style={S("flex:1; min-height:0; display:flex; flex-direction:column")}>
+        {!sm ? <div style={S(mono(10, "color:" + T.err) + "; padding:12px")}>NO PRINTER CONNECTION</div>
+          : tab === "spools" ? <SpoolsTab sm={sm} say={say} activeId={activeId} printing={printing} onSetActive={request} connected={st.connected} />
+          : tab === "filaments" ? <FilamentsTab sm={sm} say={say} connected={st.connected} />
+          : tab === "vendors" ? <VendorsTab sm={sm} say={say} connected={st.connected} />
+          : <div style={S("flex:1; min-height:0; display:flex; flex-direction:column")}>
+              <Row gap={8} style="padding-bottom:7px">
+                <Val size={9} color={T.faint} style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{url}</Val>
+                <Val size={9} color={T.mute}>SCHEMA · CATALOGUE · BACKUP · SETTINGS LIVE HERE</Val>
+                <Btn small onClick={() => setFrame(n => n + 1)} disabled={!online || mixed}>RELOAD</Btn>
+              </Row>
       {svc.loading && !svc.data ? (
         <div style={S(`flex:1; display:flex; align-items:center; justify-content:center; ${mono(10, `letter-spacing:.24em; color:${T.ghost}`)}`)}>CONNECTING …</div>
       ) : online && !mixed ? (
@@ -305,6 +292,18 @@ export default function Page({ store, api }) {
           <Btn onClick={refresh}>RETRY</Btn>
         </div>
       )}
+            </div>}
+      </div>
+
+      {/* Cancels the panel body's 10px 12px padding so the strip spans the panel like the design's. */}
+      {pending && <div style={S("margin:10px -12px -10px; overflow:hidden; border-radius:0 0 5px 5px")}>
+        <Confirm yes={pending.id ? "SET ACTIVE" : "CLEAR"}
+          text={pending.id
+            ? `A print is running. Set #${pending.id} · ${spoolName(byId[pending.id])} active? The rest of this job's filament is logged against it.`
+            : "A print is running. Clear the active spool? The rest of this job's filament use is not logged anywhere."}
+          onYes={() => { const p = pending; setPending(null); setActive(p.id); }}
+          onNo={() => setPending(null)} />
+      </div>}
     </Panel>
 
     {/* The one gate editor in the build (lib/GateEditor.jsx); the dashboard mounts the same component. */}
