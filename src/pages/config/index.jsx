@@ -48,11 +48,19 @@ const TEXT_RE = /\.(cfg|conf|ini|txt|md|json|py|sh|ya?ml|log|bak[\w.\-]*|bkp|bac
 const PRINTER_SNAP = /^printer-(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\.cfg(-old)?$/;
 const MMU_SNAP = /^(mmu-(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2}))\//;
 
+// One section per KIND, with ROOT pinned at the top — printer.cfg is Klipper's entry point and should
+// never be hunted for alphabetically among the service configs (it used to sort between moonraker.conf
+// and sonar.conf). MMU survives as a labelled SUBGROUP inside INCLUDED rather than a top-level section,
+// because every one of its 24 files is reached through an [include]: it is a place, not a kind.
 const GROUPS = [
-  { id: "main", title: "MAIN PRINTER FILES", accent: T.accent, hint: "printer.cfg, what it includes, and the other root files" },
-  { id: "mmu", title: "MMU (HAPPY HARE)", accent: T.info, hint: "mmu/ — base, addons, optional, and the live mmu_vars.cfg" },
-  { id: "backups", title: "BACKUPS & OTHERS", accent: T.mute, hint: "timestamped copies, upgrade snapshots, archives, this app's own files" },
+  { id: "root",     title: "ROOT",                 accent: T.accent, hint: "printer.cfg — Klipper reads this and nothing else directly" },
+  { id: "included", title: "INCLUDED",             accent: T.ok,     hint: "reached from printer.cfg through [include] lines" },
+  { id: "service",  title: "SERVICE CONFIGS",      accent: T.info,   hint: "Moonraker, crowsnest, KlipperScreen… — Klipper never reads these" },
+  { id: "backups",  title: "BACKUPS",              accent: T.mute,   hint: "timestamped copies, upgrade snapshots, archives, this app's own files" },
+  { id: "others",   title: "OTHERS",               accent: T.faint,  hint: "present but not reached by printer.cfg and not a service config" },
 ];
+/** Files under mmu/ — the subgroup inside INCLUDED. */
+const isMmuPath = p => String(p || "").startsWith("mmu/");
 const SORTS = [["name", "NAME"], ["modified", "MODIFIED"], ["size", "SIZE"]];
 
 // What a file IS, for the filter row. Exactly one kind per file, tested in this order.
@@ -73,11 +81,7 @@ function kindOf(f, included) {
   return "others";
 }
 
-function classify(path) {
-  if (OWN_PREFIXES.some(p => path.startsWith(p)) || BACKUP_RES.some(r => r.test(path))) return "backups";
-  if (path.startsWith("mmu/") || path === "mmu_klipperscreen.conf") return "mmu";
-  return "main";
-}
+
 const isTextName = name => TEXT_RE.test(name) || /\.\d{4}-\d{2}-\d{2}(-\d{4})?$/.test(name);
 const baseOf = p => { const i = p.lastIndexOf("/"); return i < 0 ? p : p.slice(i + 1); };
 
@@ -757,11 +761,13 @@ export default function Page({ store, api }) {
   const included = React.useMemo(() => (deepIncluded.data && deepIncluded.data.size
     ? new Set([...includedFlat, ...deepIncluded.data]) : includedFlat), [includedFlat, deepIncluded.data]);
   const byPath = React.useMemo(() => new Map(files.map(f => [f.path, f])), [files]);
+  // Buckets are the KINDS now, so this depends on `included` (which arrives asynchronously as the
+  // include graph resolves) rather than on the path alone.
   const grouped = React.useMemo(() => {
-    const g = { main: [], mmu: [], backups: [] };
-    for (const f of files) g[classify(f.path)].push(f);
+    const g = { root: [], included: [], service: [], backups: [], others: [] };
+    for (const f of files) g[kindOf(f, included)].push(f);
     return g;
-  }, [files]);
+  }, [files, included]);
   const draftPaths = React.useMemo(() => new Set(listDrafts()), [draftTick]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const needle = q.trim().toLowerCase();
@@ -784,7 +790,7 @@ export default function Page({ store, api }) {
   const rightOf = f => (sort.k === "modified" ? fmtWhen(f.modified) : fmtBytes(f.size));
 
   const selFile = sel ? byPath.get(sel.path) || null : null;
-  const selGroup = sel ? classify(sel.path) : null;
+  const selGroup = sel ? kindOf(selFile || { path: sel.path, name: sel.name }, included) : null;
   const selBadges = sel ? badgesFor(selFile || { path: sel.path, name: baseOf(sel.path) }, selGroup, included) : [];
 
   const pick = f => setSel({ path: f.path, name: f.name, size: f.size, modified: f.modified, permissions: f.permissions });
@@ -827,7 +833,10 @@ export default function Page({ store, api }) {
     // Both numbers describe the rows on screen. Counting LIVE over the UNFILTERED group produced
     // headers reading "9 LIVE  0 / 20" on a collapsed, empty group — and with a kind unticked the
     // total stayed at 20 while nine rows showed, contradicting the folder counts right beneath it.
-    const live = g.id === "backups" ? 0 : rows.filter(f => f.path === "printer.cfg" || included.has(f.path)).length;
+    // "LIVE" means Klipper actually reads it. That is exactly ROOT + INCLUDED now, so the other three
+    // sections have no live count rather than a misleading zero-of-something.
+    const live = (g.id === "root" || g.id === "included")
+      ? rows.filter(f => f.path === "printer.cfg" || included.has(f.path)).length : 0;
     const head = <GroupHead key={g.id + "/h"} title={g.title} accent={g.accent} hint={g.hint} open={isOpen} onToggle={() => toggleGroup(g.id)}
       right={<>
         {!!live && <Label style={`color:${T.ok}`}>{live + " LIVE"}</Label>}
@@ -837,11 +846,24 @@ export default function Page({ store, api }) {
     let body;
     if (!rows.length) {
       body = <div style={S(`${mono(10, `color:${T.ghost}`)}; padding:10px 12px`)}>{filtering ? "No match" : "Nothing here"}</div>;
+    } else if (g.id === "included") {
+      // MMU as a labelled SUBGROUP: all 24 of its files are [include]d, so they belong in this section,
+      // but burying them in one alphabetical tree loses the structure the owner asked to keep. The
+      // subgroup drops the common "mmu/" base because every row under it shares it.
+      const mmuRows = rows.filter(f => isMmuPath(f.path));
+      const rest = rows.filter(f => !isMmuPath(f.path));
+      body = <>
+        {!!rest.length && renderTree(buildTree(rest, ""), g.id, 0)}
+        {!!mmuRows.length && <>
+          <SubHead title="MMU (HAPPY HARE)" right={mmuRows.length} />
+          {/* depth is a LEVEL (renderTree multiplies by 12px), not a pixel value — 1 = one step in. */}
+          {renderTree(buildTree(mmuRows, "mmu/"), g.id, 1)}
+        </>}
+      </>;
     } else if (g.id !== "backups") {
       // A real directory tree. The flat list used to show "KAMP/" as a faint prefix on each row, which
-      // read as one long list and lost the structure entirely — folders are now their own collapsible
-      // rows. MMU files drop the common "mmu/" base since every row in that group shares it.
-      body = renderTree(buildTree(rows, g.id === "mmu" ? "mmu/" : ""), g.id, 0);
+      // read as one long list and lost the structure entirely — folders are now their own collapsible rows.
+      body = renderTree(buildTree(rows, ""), g.id, 0);
     } else {
       const b = bucketBackups(rows);
       const sets = b.sets.slice().sort((x, y) => cmp({ path: x.dir, size: x.size, modified: x.when }, { path: y.dir, size: y.size, modified: y.when }));
