@@ -399,18 +399,29 @@ export function mmuVals(ctx) {
     const planned = num(plannedByGate[key]);
     const usedG = (num(fuse.used[key]) || 0) * gramsPerMm(i);
     if (planned === null || planned <= 0) {
+      sp.useRowStyle = "display:none";
       sp.useTrackStyle = "display:none";
       sp.useBarStyle = "display:none";
+      sp.usePctLabel = "";
+      sp.usePctStyle = "display:none";
       sp.useTitle = "";
       return;
     }
     const pct = Math.max(0, Math.min(100, usedG / planned * 100));
     const col = sp.color || UNKNOWN_COLOR;
-    sp.useTrackStyle = "height:3px; border-radius:2px; background:#11161f; overflow:hidden; margin-top:1px";
+    sp.useRowStyle = "display:flex; align-items:center; gap:4px; margin-top:3px";
+    sp.useTrackStyle = "flex:1; min-width:0; height:3px; border-radius:2px; background:#11161f; overflow:hidden";
     sp.useBarStyle = `width:${pct.toFixed(1)}%; height:100%; border-radius:2px; background:${col}; ` +
       `opacity:${pct > 0 ? 0.95 : 0}; transition:width .4s ease`;
-    sp.useTitle = usedG.toFixed(1) + " g of " + planned.toFixed(1) + " g planned this print ("
-      + Math.round(pct) + "%)" + (fuse.partial ? " — measured only since this page opened" : "");
+    // The number goes ON the card, not in a tooltip: it is the answer to "how far through this spool's
+    // share of the print am I", which is the question the bar poses. `~` marks a figure the tracker can
+    // only have measured since the page opened, so a low value never silently reads as a measurement.
+    sp.usePctLabel = (fuse.partial ? "~" : "") + Math.round(pct) + "%";
+    sp.usePctStyle = "flex:none; font-family:'JetBrains Mono',monospace; font-size:8px; letter-spacing:.02em; color:" +
+      (pct >= 99 ? "#3ddcc4" : pct > 0 ? "#8b98aa" : "#4d5a6b");
+    sp.useTitle = "This print: " + usedG.toFixed(1) + " g of " + planned.toFixed(1) + " g planned for gate " + i
+      + " (" + Math.round(pct) + "%)" + (fuse.partial ? " — measured only since this page opened" : "")
+      + ". The ring above is the spool's remaining stock, a different number.";
   });
 
   const totalMm = num(ps.filament_used);

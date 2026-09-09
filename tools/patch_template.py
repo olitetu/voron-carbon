@@ -278,12 +278,13 @@ else:
 # are (used grams / the slicer's planned grams for that gate). Deliberately distinct from the ring above
 # it, which is the spool's remaining STOCK — two different questions that used to have only one answer
 # on the card. Gates the plan does not mention render nothing (useTrackStyle is display:none).
-if "sp.useTrackStyle" not in src:
+if "sp.useRowStyle" not in src:
     needle = "<div style={S(sp.gateStyle)}>{sp.gate}</div>"
     n = src.count(needle)
     if n == 1:
-        repl = (needle + '<div title={sp.useTitle} style={S(sp.useTrackStyle)}>'
-                '<div style={S(sp.useBarStyle)}></div></div>')
+        repl = (needle + '<div title={sp.useTitle} style={S(sp.useRowStyle)}>'
+                '<div style={S(sp.useTrackStyle)}><div style={S(sp.useBarStyle)}></div></div>'
+                '<span style={S(sp.usePctStyle)}>{sp.usePctLabel}</span></div>')
         src = src.replace(needle, repl, 1)
         applied.append("spool card print progress (1x)")
     else:
