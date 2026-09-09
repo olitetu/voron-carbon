@@ -8,6 +8,7 @@ import { Panel, Btn, Chip, Label, Val, Row, Divider, Input, Toggle, Table, Modal
 import { S, Hv } from "../../lib/ui.js";
 import { useAsync } from "../../lib/useStore.js";
 import { num, swatch, grams, metres, whenSeconds, spoolName, fillOf, materialsOf, EMPTY_COLOR, LOW } from "../../lib/spools.js";
+import { fromExternal } from "../../lib/spoolmanApi.js";
 
 const when = iso => { const t = whenSeconds(iso); return t === null ? "—" : fmtDate(t); };
 const money = v => (num(v) === null ? "—" : num(v).toFixed(2));
@@ -255,6 +256,8 @@ function SpoolForm({ sm, sp, fils, locs, save, onClose, onDelete, printing, acti
 export function FilamentsTab({ sm, say, connected }) {
   const [q, setQ] = React.useState("");
   const [edit, setEdit] = React.useState(null);
+  const [vendorHint, setVendorHint] = React.useState(null);   // manufacturer with no matching vendor
+  const [dbOpen, setDbOpen] = React.useState(false);
   const [confirmDel, setConfirmDel] = React.useState(null);
   const filaments = useAsync(() => sm.listFilaments(), [connected]);
   const vendors = useAsync(() => sm.listVendors(), [connected]);
@@ -284,7 +287,8 @@ export function FilamentsTab({ sm, say, connected }) {
   return <>
     <Row gap={8} style="flex-wrap:wrap">
       <Input value={q} onChange={e => setQ(e.target.value)} placeholder="name · material · vendor · article" style="flex:1 1 240px" />
-      <Btn small kind="accent" onClick={() => setEdit({})}>NEW FILAMENT</Btn>
+      <Btn small onClick={() => setDbOpen(true)}>FROM DATABASE</Btn>
+      <Btn small kind="accent" onClick={() => { setVendorHint(null); setEdit({}); }}>NEW FILAMENT</Btn>
       <Btn small onClick={() => { filaments.reload(); vendors.reload(); }}>REFRESH</Btn>
     </Row>
     <div style={S("margin-top:8px; flex:1; min-height:0; overflow:auto")}>
@@ -294,8 +298,15 @@ export function FilamentsTab({ sm, say, connected }) {
     </div>
     <Val size={9.5} color={T.faint} style="margin-top:6px">{rows.length + " / " + all.length}</Val>
 
-    {edit ? <FilamentForm sm={sm} fl={edit} vens={vens} mats={mats} save={save}
-      onClose={() => setEdit(null)} onDelete={() => setConfirmDel(edit)} /> : null}
+    {dbOpen ? <ExternalPicker sm={sm} vens={vens} onClose={() => setDbOpen(false)}
+      onPick={e => {
+        const { draft, vendorName } = fromExternal(e, vens);
+        setDbOpen(false); setVendorHint(vendorName); setEdit(draft);
+      }} /> : null}
+
+    {edit ? <FilamentForm sm={sm} fl={edit} vens={vens} mats={mats} save={save} vendorHint={vendorHint}
+      onVendorCreated={v => { setVendorHint(null); vendors.reload(); return v; }}
+      onClose={() => { setEdit(null); setVendorHint(null); }} onDelete={() => setConfirmDel(edit)} /> : null}
     {confirmDel ? <Modal open title={"DELETE FILAMENT #" + confirmDel.id} onClose={() => setConfirmDel(null)} width={430}>
       <Confirm yes="DELETE" no="CANCEL"
         text={"Delete filament #" + confirmDel.id + " (" + (confirmDel.name || confirmDel.material || "—") + ")? Spoolman refuses while spools still reference it."}
@@ -305,7 +316,7 @@ export function FilamentsTab({ sm, say, connected }) {
   </>;
 }
 
-function FilamentForm({ sm, fl, vens, mats, save, onClose, onDelete }) {
+function FilamentForm({ sm, fl, vens, mats, save, onClose, onDelete, vendorHint, onVendorCreated }) {
   const isNew = !fl.id;
   const initial = React.useMemo(() => ({
     name: fl.name || "", vendor_id: (fl.vendor || {}).id ?? null, material: fl.material || "",
@@ -338,7 +349,20 @@ function FilamentForm({ sm, fl, vens, mats, save, onClose, onDelete }) {
     title={isNew ? "NEW FILAMENT" : "FILAMENT #" + fl.id + " · " + (fl.name || fl.material || "—")}>
     <Row gap={10} style="flex-wrap:wrap">
       <F label="NAME"><Txt f={f} k="name" ph="e.g. Tangerine Yellow" /></F>
-      <F label="VENDOR"><Sel f={f} k="vendor_id" options={vens.map(v => ({ id: v.id, label: v.name }))} blank="—" /></F>
+      <F label="VENDOR" hint={vendorHint ? "not in Spoolman yet" : null}>
+        <Row gap={6}>
+          <Sel f={f} k="vendor_id" options={vens.map(v => ({ id: v.id, label: v.name }))} blank="—" />
+          {/* The catalogue names a manufacturer that has no vendor record here. Creating it silently
+              would be worse than asking — one click, and it is selected. */}
+          {vendorHint ? <Btn small disabled={save.busy} onClick={async () => {
+            const ok = await save.run("Created vendor " + vendorHint, async () => {
+              const v = await sm.createVendor({ name: vendorHint });
+              if (v && v.id) { f.set("vendor_id", v.id); onVendorCreated && onVendorCreated(v); }
+            });
+            return ok;
+          }}>{"+ " + vendorHint}</Btn> : null}
+        </Row>
+      </F>
     </Row>
     <Row gap={10} style="margin-top:10px; flex-wrap:wrap">
       <F label="MATERIAL"><Sel f={f} k="material" options={mats} blank="—" /></F>
@@ -429,5 +453,85 @@ function VendorForm({ sm, vn, save, onClose, onDelete }) {
       <F label="EMPTY SPOOL (g)" w={140} hint="default for this vendor's spools"><Txt f={f} k="empty_spool_weight" type="number" /></F>
     </Row>
     <Row gap={10} style="margin-top:10px"><F label="COMMENT"><Txt f={f} k="comment" /></F></Row>
+  </Modal>;
+}
+
+// ---- external catalogue picker ---------------------------------------------------------------------
+// Spoolman's "database": 6,967 commercial filaments, 2.6 MB, and NO server-side query parameters — so
+// every filter here is client-side. Two consequences shape this component:
+//   · it is only mounted when the picker opens, so visiting the FILAMENTS tab never pulls 2.6 MB;
+//   · the rendered list is CAPPED. 6,967 rows of DOM would stall the page, and the honest answer to an
+//     unfiltered search is "narrow it down", not thirty seconds of layout.
+const CAP = 150;
+
+function ExternalPicker({ sm, vens, onClose, onPick }) {
+  const [q, setQ] = React.useState("");
+  const [maker, setMaker] = React.useState(null);
+  const [mat, setMat] = React.useState(null);
+  const db = useAsync(() => sm.externalFilaments(), []);
+  const all = Array.isArray(db.data) ? db.data : [];
+
+  // Facets from the catalogue itself. Manufacturers already present as vendors float to the top,
+  // because those are the ones this printer actually buys.
+  const known = React.useMemo(() => new Set((vens || []).map(v => String(v.name || "").toLowerCase())), [vens]);
+  const makers = React.useMemo(() => {
+    const c = new Map();
+    for (const e of all) { const m = e.manufacturer || ""; if (m) c.set(m, (c.get(m) || 0) + 1); }
+    return [...c.entries()]
+      .sort((a, b) => (known.has(b[0].toLowerCase()) - known.has(a[0].toLowerCase())) || b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([name, n]) => ({ id: name, label: name + " (" + n + ")" + (known.has(name.toLowerCase()) ? " ✓" : "") }));
+  }, [all, known]);
+  const mats = React.useMemo(() => {
+    const c = new Map();
+    for (const e of all) { const m = e.material || ""; if (m) c.set(m, (c.get(m) || 0) + 1); }
+    return [...c.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([m, n]) => ({ id: m, label: m + " (" + n + ")" }));
+  }, [all]);
+
+  // EVERY token must appear, in any order. Substring matching on the joined string made word order
+  // significant — "bambu abs azure" found nothing because the haystack reads "Bambu Lab Azure ABS",
+  // which is not how anyone searches a catalogue of 7,000 products.
+  const tokens = React.useMemo(() => q.trim().toLowerCase().split(/\s+/).filter(Boolean), [q]);
+  const hits = React.useMemo(() => all.filter(e => {
+    if (maker && e.manufacturer !== maker) return false;
+    if (mat && e.material !== mat) return false;
+    if (!tokens.length) return true;
+    const hay = `${e.manufacturer || ""} ${e.name || ""} ${e.material || ""}`.toLowerCase();
+    return tokens.every(t => hay.includes(t));
+  }), [all, tokens, maker, mat]);
+  const shown = hits.slice(0, CAP);
+
+  return <Modal open width={620} onClose={onClose} title="FILAMENT DATABASE"
+    footer={<>
+      <Val size={9.5} color={T.faint} style="flex:1">
+        {db.loading ? "LOADING THE CATALOGUE …"
+          : hits.length > CAP ? hits.length + " MATCHES — SHOWING " + CAP + ", NARROW THE SEARCH"
+            : hits.length + " OF " + all.length + " MATCHES"}
+      </Val>
+      <Btn small onClick={onClose}>CANCEL</Btn>
+    </>}>
+    <Row gap={8} style="flex-wrap:wrap">
+      <Input value={q} onChange={e => setQ(e.target.value)} placeholder="manufacturer · name · material" style="flex:1 1 200px" />
+      <Sel f={{ v: { maker }, set: (_k, x) => setMaker(x) }} k="maker" options={makers} blank="ALL MAKERS" />
+      <Sel f={{ v: { mat }, set: (_k, x) => setMat(x) }} k="mat" options={mats} blank="ALL MATERIALS" />
+    </Row>
+
+    <div style={S(`margin-top:9px; max-height:340px; overflow-y:auto; overscroll-behavior:contain; border:1px solid ${T.line}; border-radius:4px`)}>
+      {db.loading ? <div style={S(`padding:16px; ${mono(10, `color:${T.ghost}`)}`)}>FETCHING 6,967 ENTRIES (2.6 MB) — ONCE PER SESSION …</div>
+        : db.error ? <Row gap={10} style="padding:12px"><Val size={10.5} color={T.err}>{db.error}</Val><Btn small onClick={() => db.reload()}>RETRY</Btn></Row>
+          : !shown.length ? <div style={S(`padding:16px; ${mono(10, `color:${T.faint}`)}`)}>NO CATALOGUE ENTRY MATCHES</div>
+            : shown.map(e => {
+              const col = swatch(e.color_hex) || (Array.isArray(e.color_hexes) && swatch(e.color_hexes[0])) || EMPTY_COLOR;
+              return <Hv key={e.id} as="div" onClick={() => onPick(e)}
+                style={`display:flex; align-items:center; gap:9px; padding:6px 10px; cursor:pointer; border-bottom:1px solid ${T.line}`}
+                hover={`background:${T.panel3}`}>
+                <span style={S(`width:11px; height:11px; flex:none; border-radius:2px; border:1px solid ${T.line2}; background:${col}`)} />
+                <span style={S(`width:104px; flex:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; ${mono(9.5, `color:${known.has(String(e.manufacturer || "").toLowerCase()) ? T.ok : T.mute}`)}`)}>{e.manufacturer}</span>
+                <span style={S(`flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:${T.body}`)}>{e.name}</span>
+                <Chip color={T.dim}>{e.material}</Chip>
+                <Val size={9} color={T.faint}>{(e.diameter ?? "—") + "mm"}</Val>
+                <Val size={9} color={T.faint}>{(e.extruder_temp ?? "—") + "°"}</Val>
+              </Hv>;
+            })}
+    </div>
   </Modal>;
 }

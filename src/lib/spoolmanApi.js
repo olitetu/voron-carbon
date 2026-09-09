@@ -41,6 +41,9 @@ const qs = params => {
   return s ? "?" + s : "";
 };
 
+/** Session cache for the 2.6 MB external catalogue — see externalFilaments(). */
+const _extCache = { filaments: null, materials: null };
+
 export function makeSpoolman(api) {
   if (!api || typeof api.spoolman !== "function") return null;
   const get = p => api.spoolman(p);
@@ -91,7 +94,56 @@ export function makeSpoolman(api) {
      */
     fields: entity => get("/field/" + entity),
 
+    /**
+     * Spoolman's bundled catalogue of commercial filaments — what its own UI calls the database.
+     *
+     * 6,967 entries and 2.6 MB, with NO query parameters: it is all-or-nothing and every filter has to
+     * be applied client-side. So it is fetched LAZILY (only when the picker opens, never on mounting the
+     * FILAMENTS tab) and cached for the session, because pulling 2.6 MB through Moonraker's proxy twice
+     * would be careless.
+     */
+    externalFilaments: () => (_extCache.filaments
+      ? Promise.resolve(_extCache.filaments)
+      : get("/external/filament").then(r => { _extCache.filaments = Array.isArray(r) ? r : []; return _extCache.filaments; })),
+    externalMaterials: () => (_extCache.materials
+      ? Promise.resolve(_extCache.materials)
+      : get("/external/material").then(r => { _extCache.materials = Array.isArray(r) ? r : []; return _extCache.materials; })),
+
     info: () => get("/info"),
     health: () => get("/health"),
+  };
+}
+
+/**
+ * One catalogue entry -> the fields Spoolman's own filament record uses.
+ *
+ * The two vocabularies differ: the catalogue says `extruder_temp` / `bed_temp` / `manufacturer` where a
+ * filament has `settings_extruder_temp` / `settings_bed_temp` / `vendor_id`, and `color_hexes` is a list
+ * where `multi_color_hexes` is a comma-separated string. `vendors` is used to resolve the manufacturer
+ * NAME to an existing vendor id; an unmatched manufacturer is returned as `vendorName` so the caller can
+ * offer to create it rather than silently dropping it.
+ */
+export function fromExternal(e, vendors) {
+  const name = String((e && e.manufacturer) || "").trim();
+  const match = (Array.isArray(vendors) ? vendors : [])
+    .find(v => String(v.name || "").trim().toLowerCase() === name.toLowerCase());
+  const hexes = Array.isArray(e && e.color_hexes) ? e.color_hexes.filter(Boolean).join(",") : null;
+  return {
+    draft: {
+      name: e.name || "",
+      material: e.material || "",
+      density: e.density ?? null,
+      diameter: e.diameter ?? null,
+      weight: e.weight ?? null,
+      spool_weight: e.spool_weight ?? null,
+      color_hex: String(e.color_hex || "").replace(/^#/, ""),
+      multi_color_hexes: hexes || undefined,
+      multi_color_direction: e.multi_color_direction || undefined,
+      settings_extruder_temp: e.extruder_temp ?? null,
+      settings_bed_temp: e.bed_temp ?? null,
+      external_id: e.id || undefined,
+      vendor: match ? { id: match.id, name: match.name } : null,
+    },
+    vendorName: match ? null : (name || null),
   };
 }
