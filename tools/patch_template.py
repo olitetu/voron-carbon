@@ -273,6 +273,34 @@ if "f.pctField" not in src:
 else:
     applied.append("fan typed % entry (already patched)")
 
+# ---- FILAMENT USED: the bar becomes a print-length timeline ----
+# The design's bar was a proportion chart — segments summing to 100% of what had been used so far, so it
+# looked identical at 5% and 95% into a job. Owner wants a loading bar for the PRINT, coloured in the
+# order the filaments were actually laid down. So it now maps V.filamentSeq, whose widths are absolute
+# fractions of metadata.filament_total: the segments sum to the fraction consumed, and the track showing
+# through behind them is the filament still to come. Each segment carries a hover title (gate + metres),
+# and the scale is stated underneath, because a bar that no longer fills to 100% needs to say what full
+# would mean.
+if "V.filamentSeq" not in src:
+    needle = ('<div style={S("display:flex; height:7px; border-radius:4px; overflow:hidden; background:#131a24")}>'
+              '{(V.filamentUse || []).map((u, _i9) => (<React.Fragment key={_i9}>'
+              '<div style={S(u.barStyle)}></div></React.Fragment>))}</div>')
+    n = src.count(needle)
+    if n == 1:
+        repl = ('<div style={S("display:flex; height:9px; border-radius:5px; overflow:hidden; background:#131a24; '
+                'border:1px solid #1c2430")}>'
+                '{(V.filamentSeq || []).map((u, _i9) => (<React.Fragment key={_i9}>'
+                '<div title={u.title} style={S(u.barStyle)}></div></React.Fragment>))}</div>'
+                '<div style={S("display:flex; align-items:baseline; gap:8px; margin-top:1px")}>'
+                '<span style={S("font-family:\'JetBrains Mono\',monospace; font-size:8.5px; letter-spacing:.1em; color:#6b7789")}>'
+                '{V.filamentSeqLabel}</span></div>')
+        src = src.replace(needle, repl, 1)
+        applied.append("filament timeline bar (1x)")
+    else:
+        failed.append(f"filament timeline bar: found {n} occurrence(s) of the stacked bar, expected 1")
+else:
+    applied.append("filament timeline bar (already patched)")
+
 # ---- chain node values: expose the hover title ----
 # The ENCODER node shows SIGNED movement (see trackEncoder in adapters/mmu.js); the lifetime odometer it
 # is derived from stays reachable as a tooltip rather than being lost. Two occurrences: preNodes and

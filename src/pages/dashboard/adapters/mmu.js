@@ -56,7 +56,11 @@ function nozzleDiameter(st, raw, api) {
 // (carbon.fuse.<filename>) so a reload keeps the breakdown. If the job started before the page was opened the
 // breakdown is only partial and is labelled honestly ("per-gate since page open").
 const FUSE_PREFIX = "carbon.fuse.";
-const _fuse = { file: null, last: null, used: {}, partial: false, lastGate: null, savedAt: 0, dirty: false };
+// `runs` is the CHRONOLOGICAL sequence [{ g, mm }, …] — the same deltas as `used`, but kept in the order
+// they happened so the panel can draw the print as a timeline of colours rather than a pie of totals.
+// A delta on the same gate extends the last run; a gate change appends one, so the array stays about as
+// long as the job has toolchanges (this print: filament_change_count 48).
+const _fuse = { file: null, last: null, used: {}, runs: [], partial: false, lastGate: null, savedAt: 0, dirty: false };
 function lsGet(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage may be unavailable */ } }
 
@@ -70,25 +74,29 @@ export function trackFilamentUse(ps, gate) {
     if (saved && typeof saved === "object" && saved.used && typeof saved.used === "object" && typeof saved.last === "number" && saved.last <= total + 1) {
       _fuse.used = Object.assign({}, saved.used); _fuse.last = saved.last; _fuse.partial = !!saved.partial;
       _fuse.lastGate = typeof saved.lastGate === "number" ? saved.lastGate : null;
+      _fuse.runs = Array.isArray(saved.runs) ? saved.runs.filter(r => r && typeof r.mm === "number") : [];
     } else {
-      _fuse.used = {}; _fuse.last = total; _fuse.partial = total > 1; _fuse.lastGate = null;
+      _fuse.used = {}; _fuse.runs = []; _fuse.last = total; _fuse.partial = total > 1; _fuse.lastGate = null;
     }
     _fuse.dirty = true;
   }
   if (total < _fuse.last - 1) {            // filament_used went backwards → a new job with the same filename
-    _fuse.used = {}; _fuse.last = total; _fuse.partial = total > 1; _fuse.dirty = true;
+    _fuse.used = {}; _fuse.runs = []; _fuse.last = total; _fuse.partial = total > 1; _fuse.dirty = true;
   }
   const d = total - _fuse.last;
   if (d > 0) {
     const g = gate !== null && gate !== undefined ? gate : _fuse.lastGate;
     const key = g === null || g === undefined ? "-1" : String(g);
     _fuse.used[key] = (_fuse.used[key] || 0) + d;
+    const tail = _fuse.runs[_fuse.runs.length - 1];
+    if (tail && tail.g === key) tail.mm += d;      // same gate: extend the current run
+    else _fuse.runs.push({ g: key, mm: d });       // gate changed: a new run starts here
     _fuse.last = total; _fuse.dirty = true;
   }
   if (gate !== null && gate !== undefined) _fuse.lastGate = gate;
   const now = Date.now();
   if (_fuse.dirty && file && now - _fuse.savedAt > 5000) {
-    lsSet(FUSE_PREFIX + file, { used: _fuse.used, last: _fuse.last, partial: _fuse.partial, lastGate: _fuse.lastGate, ts: now });
+    lsSet(FUSE_PREFIX + file, { used: _fuse.used, runs: _fuse.runs, last: _fuse.last, partial: _fuse.partial, lastGate: _fuse.lastGate, ts: now });
     _fuse.savedAt = now; _fuse.dirty = false;
   }
   return _fuse;
@@ -371,6 +379,56 @@ export function mmuVals(ctx) {
         (on ? "#e8eef6" : "#6b7789")
     };
   });
+  // ---- the print as a filament timeline -----------------------------------------------------------
+  // Not a proportion chart. The bar spans the WHOLE job (metadata.filament_total, 73,221 mm on this
+  // print) and fills as filament is consumed, each colour laid down in the order it was actually used.
+  // That is deliberately a different measure from the progress ring: filament is not linear with file
+  // position — this job reads 44.9 % of filament at 61.6 % of the file.
+  //
+  // `runs` is only what this page WATCHED in sequence. But the per-gate TOTALS in `used` may cover more
+  // than that — they persist across reloads, and they predate this timeline feature. So the head of the
+  // bar is not "unattributed": we know WHICH filaments it was, only not in what order. It is therefore
+  // drawn as those gates' colours (gate order, dimmed, labelled "order not recorded") rather than as one
+  // grey block, which would throw away information we actually have.
+  const planTotalMm = num(meta.filament_total);
+  const usedMmNow = num(ps.filament_used) || 0;
+  const seqDenom = planTotalMm && planTotalMm > 0 ? planTotalMm : usedMmNow;
+  const runs = Array.isArray(fuse.runs) ? fuse.runs : [];
+  const runsByGate = {};
+  for (const r of runs) runsByGate[r.g] = (runsByGate[r.g] || 0) + (num(r.mm) || 0);
+  const segInfo = key => {
+    const g = +key, known = g >= 0 && g <= BYPASS;
+    const info = known ? gi(g) : { name: "Unknown gate", color: UNKNOWN_COLOR };
+    return { name: info.name || "—", color: info.color || UNKNOWN_COLOR };
+  };
+  // what `used` knows beyond what `runs` has sequenced, per gate
+  const priorSegs = Object.keys(fuse.used || {})
+    .map(k => ({ k, mm: Math.max(0, (num(fuse.used[k]) || 0) - (runsByGate[k] || 0)) }))
+    .filter(x => x.mm > 1)
+    .sort((a, b) => (+a.k) - (+b.k))
+    .map(x => Object.assign({ mm: x.mm, unordered: true }, segInfo(x.k)));
+  const priorMm = priorSegs.reduce((a, x) => a + x.mm, 0);
+  // anything neither sequenced nor attributed (a job that started before this page ever saw it)
+  const orphanMm = Math.max(0, usedMmNow - priorMm - runs.reduce((a, r) => a + (num(r.mm) || 0), 0));
+  const seqPct = mm => (seqDenom > 0 ? Math.max(0, mm / seqDenom * 100) : 0);
+  const filamentSeq = priorSegs
+    .concat(orphanMm > 1 ? [{ mm: orphanMm, name: "Not attributed", color: "#2a3340", unordered: true }] : [])
+    .concat(runs.map(r => Object.assign({ mm: num(r.mm) || 0 }, segInfo(r.g))))
+    .map(seg => ({
+      // Absolute widths: the segments sum to the fraction of the JOB consumed, and the track showing
+      // through behind them is the filament still to come.
+      // min-width so a short run cannot vanish: at 73 m total, a 0.05 m purge computes to 0.07% ~ 0.4px
+      // and disappears entirely. Slightly over-representing the smallest runs is the right trade for a
+      // timeline whose whole point is that you can see every colour change.
+      barStyle: `width:${seqPct(seg.mm).toFixed(3)}%; min-width:1px; height:100%; flex:none; background:${seg.color}` +
+        (seg.unordered ? "; opacity:.45" : ""),
+      title: seg.name + " · " + (seg.mm / 1000).toFixed(2) + " m" + (seg.unordered ? " · order not recorded" : "")
+    }));
+  const filamentSeqLabel = seqDenom <= 0 ? "—"
+    : (usedMmNow / 1000).toFixed(2) + " m of " + (seqDenom / 1000).toFixed(1) + " m"
+      + (planTotalMm ? " · " + Math.round(usedMmNow / planTotalMm * 100) + "%" : "")
+      + (priorMm + orphanMm > 1 ? " · first " + ((priorMm + orphanMm) / 1000).toFixed(2) + " m unordered" : "");
+
   const totalMm = num(ps.filament_used);
   // Say plainly which of the two the per-gate split came from — a predicted split must never read as measured.
   // With nothing printed yet the bar list is empty, so claiming "0.00 m used · measured per gate" asserts a
@@ -510,7 +568,7 @@ export function mmuVals(ctx) {
     carriageLabelStyle: `font-family:'JetBrains Mono',monospace; font-size:8.5px; letter-spacing:.12em; white-space:nowrap; flex:none; color:${selectorMoving ? "#8b98aa" : "#4d5a6b"}`,
     carriageLabel,
     filamentUse,
-    filamentTotal,
+    filamentTotal, filamentSeq, filamentSeqLabel,
     spools, paths, loadedColor,
     trunkAnim: `animation:vFlow ${dashCycle} linear infinite${flowSuffix}`,
     headPath: headPathD,
