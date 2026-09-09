@@ -371,6 +371,48 @@ export function mmuVals(ctx) {
         (on ? "#e8eef6" : "#6b7789")
     };
   });
+  // ---- per-card print progress ---------------------------------------------------------------------
+  // Each spool card gets its own thin bar: how far through THIS filament's share of the current job we
+  // are. Distinct from the ring above it, which is the spool's remaining stock — one is "how much of
+  // this print is done in this colour", the other is "how much of this reel is left".
+  //
+  //   denominator: the slicer's plan for that gate  (metadata.filament_weights, grams per TOOL, mapped
+  //                tool -> gate through Happy Hare's ttg_map)
+  //   numerator:   what live integration has actually attributed to that gate, converted mm -> g with
+  //                that gate's own density and diameter (gramsPerMm, same converter as the breakdown)
+  //
+  // The numerator can only ever be what this page watched, so on a job that was already running it
+  // reads low. `partial` says so, and the tooltip states it rather than letting a short bar imply the
+  // filament is barely used.
+  const plannedByGate = {};
+  if (planW) {
+    planW.forEach((w, tool) => {
+      const g2 = num(w) || 0;
+      if (g2 <= 0) return;
+      const gg = ttg && Number.isInteger(ttg[tool]) ? ttg[tool] : tool;
+      plannedByGate[String(gg)] = (plannedByGate[String(gg)] || 0) + g2;
+    });
+  }
+  spools.forEach((sp, i) => {
+    if (i >= NUM_GATES) return;                       // Bypass has no plan and no gate map entry
+    const key = String(i);
+    const planned = num(plannedByGate[key]);
+    const usedG = (num(fuse.used[key]) || 0) * gramsPerMm(i);
+    if (planned === null || planned <= 0) {
+      sp.useTrackStyle = "display:none";
+      sp.useBarStyle = "display:none";
+      sp.useTitle = "";
+      return;
+    }
+    const pct = Math.max(0, Math.min(100, usedG / planned * 100));
+    const col = sp.color || UNKNOWN_COLOR;
+    sp.useTrackStyle = "height:3px; border-radius:2px; background:#11161f; overflow:hidden; margin-top:1px";
+    sp.useBarStyle = `width:${pct.toFixed(1)}%; height:100%; border-radius:2px; background:${col}; ` +
+      `opacity:${pct > 0 ? 0.95 : 0}; transition:width .4s ease`;
+    sp.useTitle = usedG.toFixed(1) + " g of " + planned.toFixed(1) + " g planned this print ("
+      + Math.round(pct) + "%)" + (fuse.partial ? " — measured only since this page opened" : "");
+  });
+
   const totalMm = num(ps.filament_used);
   // Say plainly which of the two the per-gate split came from — a predicted split must never read as measured.
   // With nothing printed yet the bar list is empty, so claiming "0.00 m used · measured per gate" asserts a

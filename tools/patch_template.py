@@ -273,6 +273,24 @@ if "f.pctField" not in src:
 else:
     applied.append("fan typed % entry (already patched)")
 
+# ---- spool card: per-filament print progress ----
+# A thin bar under each card's gate badge: how far through THIS filament's share of the current job we
+# are (used grams / the slicer's planned grams for that gate). Deliberately distinct from the ring above
+# it, which is the spool's remaining STOCK — two different questions that used to have only one answer
+# on the card. Gates the plan does not mention render nothing (useTrackStyle is display:none).
+if "sp.useTrackStyle" not in src:
+    needle = "<div style={S(sp.gateStyle)}>{sp.gate}</div>"
+    n = src.count(needle)
+    if n == 1:
+        repl = (needle + '<div title={sp.useTitle} style={S(sp.useTrackStyle)}>'
+                '<div style={S(sp.useBarStyle)}></div></div>')
+        src = src.replace(needle, repl, 1)
+        applied.append("spool card print progress (1x)")
+    else:
+        failed.append(f"spool card print progress: found {n} occurrence(s) of the gate badge, expected 1")
+else:
+    applied.append("spool card print progress (already patched)")
+
 # ---- chain node values: expose the hover title ----
 # The ENCODER node shows SIGNED movement (see trackEncoder in adapters/mmu.js); the lifetime odometer it
 # is derived from stays reachable as a tooltip rather than being lost. Two occurrences: preNodes and
