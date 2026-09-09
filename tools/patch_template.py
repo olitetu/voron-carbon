@@ -340,6 +340,8 @@ else:
 # ---- spool card: per-gate CHECK GATE ----
 # Mirrors the edit control on the opposite corner. Both swallow the click: the card itself selects the
 # gate, and checking a gate you did not mean to select is worse than useless.
+# Glyph is ◐ — the app's OWN symbol for CHECK_GATE (adapters/macros.js GLYPH_RULES). A ✓ read as
+# "this gate is fine", which is a status, not the action of going and looking.
 if "sp.checkStyle" not in src:
     needle = ('{sp.edit ? <Hv as="div" onClick={sp.edit} title={sp.editTitle} style={sp.editStyle} '
               'hover="background:#1d2734; color:#e8eef6; border-color:#4a5666">{"\u270e"}</Hv> : null}')
@@ -347,7 +349,7 @@ if "sp.checkStyle" not in src:
     if n == 1:
         src = src.replace(needle, needle + ('{sp.check ? <Hv as="div" onClick={sp.check} title={sp.checkTitle} '
               'style={sp.checkStyle} hover="background:#1d2734; color:#3ddcc4; border-color:#4a5666">'
-              '{"\u2713"}</Hv> : null}'), 1)
+              '{"\u25d0"}</Hv> : null}'), 1)
         applied.append("spool card check gate (1x)")
     else:
         failed.append(f"spool card check gate: found {n} occurrence(s) of the edit control, expected 1")
@@ -382,15 +384,54 @@ else:
 # a click anywhere else lands on it and dismisses. One insertion instead of tagging every menu and every
 # trigger with data attributes (Template.jsx is generated — that would be a patch rule per menu).
 if "V.popScrimStyle" not in src:
-    needle = '<input ref={V.uploadInputRef} type="file"'
+    # Anchored after </aside> rather than before the upload <input>: the "upload input + drop overlay"
+    # rule's replacement text runs from the shell's style attribute straight to <aside, so inserting
+    # anything inside that span breaks ITS idempotency check and the whole patch run fails.
+    needle = '</aside>'
     n = src.count(needle)
     if n == 1:
-        src = src.replace(needle, '<div onClick={V.closePops} style={S(V.popScrimStyle)}></div>' + needle, 1)
+        src = src.replace(needle, needle + '<div onClick={V.closePops} style={S(V.popScrimStyle)}></div>', 1)
         applied.append("popover scrim (1x)")
     else:
         failed.append(f"popover scrim: found {n} occurrence(s) of the upload input, expected 1")
 else:
     applied.append("popover scrim (already patched)")
+
+# ---- TOOLHEAD button row: one row of six equal cells ----
+# The design laid out 4 columns for HOME/XY/QGL/MESH. With six buttons that wrapped to 4+2, which is
+# exactly the ragged look the owner objected to. repeat(6,1fr) puts them on one row, and the adapter
+# gives every button the same fixed height, so a glyph cell and a three-letter cell are identical boxes.
+if "repeat(6,1fr)" not in src:
+    needle = '<div style={S("display:grid; grid-template-columns:repeat(4,1fr); gap:4px; margin-bottom:10px")}>{(V.homeBtns'
+    n = src.count(needle)
+    if n == 1:
+        src = src.replace(needle,
+            '<div style={S("display:grid; grid-template-columns:repeat(6,1fr); gap:3px; margin-bottom:10px")}>{(V.homeBtns', 1)
+        applied.append("toolhead 6-column row (1x)")
+    else:
+        failed.append(f"toolhead 6-column row: found {n} occurrence(s) of the 4-column grid, expected 1")
+else:
+    applied.append("toolhead 6-column row (already patched)")
+
+# ---- MACHINE LIMITS: MOTORS OFF in the header ----
+# M84 releases every stepper on the machine, so it belongs with the machine-wide settings rather than in
+# the toolhead's move row (owner's call, and it is the correct scope).
+if "V.motorsOff" not in src:
+    # TWO panels carry this label — the wide layout and a narrow-mode variant; only one renders at a
+    # time, so both are patched and whichever is live has the button.
+    needle = 'letter-spacing:.16em; color:#8b98aa")}>{"MACHINE LIMITS"}</span>'
+    n = src.count(needle)
+    if n == 2:
+        btn = ('<Hv as="span" hover="border-color:#4a5666; color:#ffd479" active="transform:translateY(1px)" '
+               'title={V.motorsOff.title} onClick={V.motorsOff.go} '
+               'style={S("margin-left:auto; " + V.motorsOff.style)}>'
+               '<span style={S("opacity:.9")}>{V.motorsOff.t}</span>{V.motorsOff.label}</Hv>')
+        src = src.replace(needle, needle + btn, 2)
+        applied.append("machine limits motors off (2x)")
+    else:
+        failed.append(f"machine limits motors off: found {n} occurrence(s) of the panel label, expected 2")
+else:
+    applied.append("machine limits motors off (already patched)")
 
 # ---- chain node values: expose the hover title ----
 # The ENCODER node shows SIGNED movement (see trackEncoder in adapters/mmu.js); the lifetime odometer it

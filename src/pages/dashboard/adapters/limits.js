@@ -91,7 +91,24 @@ export function limitsVals(ctx) {
     };
   });
 
-  return { limits, limitsEditable: true };
+  // MOTORS OFF belongs here, not in the toolhead row: M84 releases every stepper on the machine, so it
+  // sits with the machine-wide settings. Glyph ⌁ is the app's own M84/MOTOR symbol (macros.js
+  // GLYPH_RULES), and the warn tint marks it as the destructive one — it drops position.
+  // Derived here rather than assumed: `printing` is not otherwise in this adapter's scope, and
+  // referencing it without defining it is a ReferenceError esbuild will happily ship.
+  const ps = raw.print_stats || {};
+  const printing = ps.state === "printing" && !((raw.pause_resume || {}).is_paused);
+  const motorsOff = {
+    t: "\u2301",
+    label: "MOTORS OFF",
+    title: "M84 — release all steppers" + (printing ? " (refused while printing)" : ""),
+    go: () => (act.home ? act.home("MOTORS") : log("M84 — toolhead actions not wired", "warn")),
+    style: "display:flex; align-items:center; gap:5px; padding:3px 8px; border-radius:3px; cursor:pointer;" +
+      " white-space:nowrap; font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:.08em;" +
+      " border:1px solid #3a2f14; background:#14100a; color:#f0b429"
+  };
+
+  return { limits, limitsEditable: true, motorsOff };
 }
 
 export default limitsVals;

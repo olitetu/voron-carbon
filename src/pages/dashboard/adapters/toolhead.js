@@ -5,7 +5,7 @@
 //   axes      ← raw.toolhead.position[0..2] + raw.toolhead.homed_axes ("xyz"); v shows "?" for an unhomed axis (design) and "—"
 //               when Klipper has not reported a position yet. `max` / the bar's 100 % = the printer's travel from
 //               raw.toolhead.axis_maximum (335 / 355 / 320 on this Voron), falling back to the contract's 350 / 350 / 310.
-//   homeBtns  → act.home('HOME'|'XY'|'QGL'|'MESH'|'PARK'|'CARTO'|'MOTORS')
+//   homeBtns  → act.home('HOME'|'XY'|'QGL'|'MESH'|'PARK'|'CARTO')   — MOTORS lives in MACHINE LIMITS
 //               SMART_HOME · G28 X Y · QUAD_GANTRY_LEVEL · BED_MESH_CALIBRATE · BLOBIFIER_PARK ·
 //               CARTOGRAPHER_CALIBRATE · M84. Every one is refused while printing (actions/toolhead.js).
 //   jogRows   → act.jog(axis, ±step)  X/Y 100·50·1, Z 50·10·1; the centre axis cell homes THAT axis only (X → G28 X, …).
@@ -25,9 +25,22 @@ export const Z_STEPS = [-0.025, -0.005, 0.005, 0.025];
 // Seven buttons in a 4-column grid, so the row wraps to two — the "elongated" toolhead section.
 // HOME is SMART_HOME (see actions/toolhead.js), PARK is BLOBIFIER_PARK, CARTO is the Cartographer
 // response-curve calibration, MOTORS is a plain M84.
-export const HOME_BTNS = ["HOME", "XY", "QGL", "MESH", "PARK", "CARTO", "MOTORS"];
-const BTN_LABEL = { CARTO: "CARTO CAL", MOTORS: "MOTORS" };
-const BTN_GLYPH = { MOTORS: "\u2699" };     // gear — the only one that gets an icon, being the odd action out
+// Six buttons on ONE row, every cell the same size. MOTORS OFF moved out to MACHINE LIMITS — it is not
+// a toolhead move, it releases every stepper on the machine.
+//
+// Icons reuse the app's OWN glyph vocabulary (adapters/macros.js GLYPH_RULES) rather than new ones, so
+// the same action reads the same wherever it appears: HOME ⌂, QGL ✳, MESH ▦, CALIBRATE/PROBE ⌖, PARK ⇱.
+// XY and QGL stay as words because there is no established glyph for an axis pair and QGL is already a
+// three-letter term of art.
+export const HOME_BTNS = ["HOME", "XY", "QGL", "MESH", "PARK", "CARTO"];
+const BTN_FACE = {
+  HOME:  { t: "\u2302", title: "SMART_HOME — home, and level the gantry only if needed" },
+  XY:    { t: "XY",      title: "G28 X Y — home X and Y only" },
+  QGL:   { t: "QGL",     title: "QUAD_GANTRY_LEVEL — level the gantry" },
+  MESH:  { t: "\u25a6", title: "BED_MESH_CALIBRATE — probe the bed mesh" },
+  PARK:  { t: "\u21f1", title: "BLOBIFIER_PARK — park the toolhead" },
+  CARTO: { t: "\u2316", title: "CARTOGRAPHER_CALIBRATE — calibrate the scanner response curve" }
+};
 export const AXES = ["X", "Y", "Z"];
 
 /** Fallback for ctx.field when the logic host does not provide one — same code as the design's field(); edits live in ui.edits via ctx.set. */
@@ -112,18 +125,25 @@ export function toolheadVals(ctx) {
     };
   });
 
-  const homeBtns = HOME_BTNS.map(k => ({
-    t: BTN_LABEL[k] || k,
-    glyph: BTN_GLYPH[k] || "",
-    go: () => home(k),
-    // MOTORS OFF is the disruptive one in this row — it drops the steppers and loses position — so it
-    // carries the warn tint rather than looking like another homing button.
-    style: "background:" + (k === "MOTORS" ? "#14100a" : "#0d121a") +
-      "; border:1px solid " + (k === "MOTORS" ? "#3a2f14" : "#1c2430") +
-      "; border-radius:4px; padding:7px 0; text-align:center; cursor:pointer; white-space:nowrap;" +
-      " font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:.08em; color:" +
-      (k === "MOTORS" ? "#f0b429" : "#8b98aa")
-  }));
+  // Derived, not assumed: this adapter has no `printing` in scope and referencing one is a
+  // ReferenceError that esbuild compiles happily and React surfaces only at render.
+  const psT = raw.print_stats || {};
+  const printingNow = psT.state === "printing" && !((raw.pause_resume || {}).is_paused);
+  const homeBtns = HOME_BTNS.map(k => {
+    const face = BTN_FACE[k] || { t: k, title: k };
+    return {
+      t: face.t,
+      title: face.title + (printingNow ? " (refused while printing)" : ""),
+      go: () => home(k),
+      // One uniform cell for all six: a fixed height and centred content, so a glyph button and a
+      // three-letter one are exactly the same box. Without the explicit height the icon rows measured
+      // 2px shorter than the text rows and the grid looked ragged.
+      style: "height:28px; display:flex; align-items:center; justify-content:center; background:#0d121a;" +
+        " border:1px solid #1c2430; border-radius:4px; cursor:pointer; white-space:nowrap;" +
+        " font-family:'JetBrains Mono',monospace; font-size:" + (face.t.length > 1 ? "9.5" : "13") + "px;" +
+        " letter-spacing:" + (face.t.length > 1 ? ".08em" : "0") + "; color:#8b98aa; line-height:1"
+    };
+  });
 
   const jogRows = JOG_STEPS.map(row => {
     const ax = row[0], st = row[1];

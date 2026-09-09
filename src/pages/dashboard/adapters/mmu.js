@@ -402,6 +402,18 @@ export function mmuVals(ctx) {
       plannedByGate[String(gg)] = (plannedByGate[String(gg)] || 0) + g2;
     });
   }
+  // Overall filament progress — the fallback numerator. Measured per-gate usage only exists for the part
+  // of the job this page WATCHED, and on a print that was already running that is close to nothing: this
+  // job read 54 % of its filament while the tracker had seen 1 g of one gate, so the bars showed 0/0/1/0/0
+  // against a print more than half done. A readout that contradicts the print that plainly is worse than
+  // an inferred one, so when measurement is partial the bars fall back to overall progress and SAY so.
+  //
+  // The assumption is that colours are consumed roughly evenly through the job. That is right for this
+  // kind of multi-material print and wrong for one where a colour appears only in the last few layers —
+  // hence "≈" and an explicit tooltip, never presented as measurement.
+  const planTotalMm = num(meta.filament_total);
+  const jobFrac = planTotalMm && planTotalMm > 0 && num(ps.filament_used) !== null
+    ? Math.max(0, Math.min(1, ps.filament_used / planTotalMm)) : null;
   spools.forEach((sp, i) => {
     if (i >= NUM_GATES) return;                       // Bypass has no plan and no gate map entry
     const key = String(i);
@@ -416,7 +428,16 @@ export function mmuVals(ctx) {
       sp.useTitle = "";
       return;
     }
-    const pct = Math.max(0, Math.min(100, usedG / planned * 100));
+    // Measured when we have it, inferred when we do not.
+    const measured = usedG > 0.05 && !fuse.partial;
+    const pct = measured
+      ? Math.max(0, Math.min(100, usedG / planned * 100))
+      : (jobFrac === null ? null : jobFrac * 100);
+    if (pct === null) {
+      sp.useRowStyle = "display:none"; sp.useTrackStyle = "display:none"; sp.useBarStyle = "display:none";
+      sp.usePctLabel = ""; sp.usePctStyle = "display:none"; sp.useTitle = "";
+      return;
+    }
     const col = sp.color || UNKNOWN_COLOR;
     sp.useRowStyle = "display:flex; align-items:center; gap:4px; margin-top:3px";
     sp.useTrackStyle = "flex:1; min-width:0; height:3px; border-radius:2px; background:#11161f; overflow:hidden";
@@ -425,12 +446,16 @@ export function mmuVals(ctx) {
     // The number goes ON the card, not in a tooltip: it is the answer to "how far through this spool's
     // share of the print am I", which is the question the bar poses. `~` marks a figure the tracker can
     // only have measured since the page opened, so a low value never silently reads as a measurement.
-    sp.usePctLabel = (fuse.partial ? "~" : "") + Math.round(pct) + "%";
+    sp.usePctLabel = (measured ? "" : "\u2248") + Math.round(pct) + "%";
     sp.usePctStyle = "flex:none; font-family:'JetBrains Mono',monospace; font-size:8px; letter-spacing:.02em; color:" +
       (pct >= 99 ? "#3ddcc4" : pct > 0 ? "#8b98aa" : "#4d5a6b");
-    sp.useTitle = "This print: " + usedG.toFixed(1) + " g of " + planned.toFixed(1) + " g planned for gate " + i
-      + " (" + Math.round(pct) + "%)" + (fuse.partial ? " — measured only since this page opened" : "")
-      + ". The ring above is the spool's remaining stock, a different number.";
+    sp.useTitle = measured
+      ? "This print: " + usedG.toFixed(1) + " g of " + planned.toFixed(1) + " g planned for gate " + i
+        + " (" + Math.round(pct) + "%), measured. The ring above is the spool's remaining stock."
+      : "\u2248" + Math.round(pct) + "% of the " + planned.toFixed(1) + " g planned for gate " + i
+        + ", inferred from overall filament progress — this page did not watch the whole job, so per-gate"
+        + " use could not be measured. Assumes colours are consumed evenly. The ring above is the spool's"
+        + " remaining stock, a different number.";
   });
 
   const totalMm = num(ps.filament_used);
