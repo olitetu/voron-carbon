@@ -127,8 +127,14 @@ export function commonVals(ctx) {
   const hint = st.uiPhase && st.uiPhase.endsAt > Date.now() ? st.uiPhase : null;
   const hhPhase = phaseFromAction(action);
   let phase = hhPhase !== "idle" ? hhPhase : (hint ? hint.phase : "idle");
-  // Backing the filament out after the last cut is its own leg of the sequence.
-  if (st.cutter && st.cutter.parking) phase = "storing";
+  // Backing the filament out after the last cut is its own leg of the sequence — but only for as long as
+  // that leg actually lasts. `cutter.parking` LATCHES in boot.js and nothing ever clears it, so without a
+  // freshness window one cut pinned the whole panel at "STORING TO SPOOL" for the rest of the session
+  // (observed: cuts:22, parking:true, while mmu.action was "Idle"). Measured from the logs, cut -> gate
+  // unload -> done takes ~10 s, so 15 s covers the real leg with margin and expires the stale latch.
+  const CUTTER_PARK_MS = 15000;
+  const parkFresh = !!(st.cutter && st.cutter.parking && Date.now() - (st.cutter.at || 0) < CUTTER_PARK_MS);
+  if (parkFresh) phase = "storing";
   const liveE = typeof mr.live_extruder_velocity === "number" ? mr.live_extruder_velocity : 0;
   // a manual extrude/retract from the extruder panel shows up as real extruder motion outside a print
   if (phase === "idle" && !printing && gate !== null && Math.abs(liveE) > 0.05) phase = liveE > 0 ? "extruding" : "retracting";

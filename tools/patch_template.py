@@ -233,6 +233,63 @@ elif "{V.jobProgressPct}" in src:
 else:
     failed.append('progress pct: could not anchor {"50"} near the progress ring')
 
+# ---- spool card material line: bind the style so the spool id is legible ----
+# The design hardcoded 8px #4d5a6b here (2.67:1). The line now carries "ABS · #43" — an id you actually
+# read — so the adapter owns the style.
+if "sp.matStyle" not in src:
+    needle = ('<div style={S("font-family:\'JetBrains Mono\',monospace; font-size:8px; color:#4d5a6b; '
+              'text-align:center; letter-spacing:.05em")}>{sp.mat}</div>')
+    n = src.count(needle)
+    if n == 1:
+        src = src.replace(needle, '<div style={S(sp.matStyle)}>{sp.mat}</div>', 1)
+        applied.append("spool card material style (1x)")
+    else:
+        failed.append(f"spool card material style: found {n} occurrence(s), expected 1")
+else:
+    applied.append("spool card material style (already patched)")
+
+# ---- FANS rows: typed % entry for the fans Klipper lets us set ----
+# A 3 px bar cannot express "37 %". Settable fans (Part Fan / Chamber / Exhaust) get an input bound to
+# ctx.field, exactly as the LED rows already did; heater_fan / controller_fan have no pctField and keep
+# the plain text, because Klipper owns their speed.
+# The needle includes the {f.k} label span on purpose: the bare value span is IDENTICAL in the V.factors
+# rows further down the file (also mapped as `f`), and a blind replace silently rewrote those too.
+if "f.pctField" not in src:
+    needle = ('<span style={S("font-size:11.5px; color:#8b98aa")}>{f.k}</span>'
+              '<span style={S("font-family:\'JetBrains Mono\',monospace; font-size:10.5px; color:#e8eef6")}>{f.v}</span>')
+    n = src.count(needle)
+    if n == 1:
+        repl = ('<span style={S("font-size:11.5px; color:#8b98aa")}>{f.k}</span>'
+                '{f.pctField ? (<span style={S("display:flex; align-items:center; gap:5px")}>'
+                '{f.rpmLabel ? <span style={S(f.rpmStyle)}>{f.rpmLabel}</span> : null}'
+                '<input type="text" value={f.pctField.value} onChange={f.pctField.onChange} '
+                'onBlur={f.pctField.onBlur} onKeyDown={f.pctField.onKeyDown} style={S(f.pctInputStyle)} />'
+                '<span style={S(f.pctSuffixStyle)}>{"%"}</span></span>) : ('
+                '<span style={S("font-family:\'JetBrains Mono\',monospace; font-size:10.5px; color:#e8eef6")}>{f.v}</span>)}')
+        src = src.replace(needle, repl, 1)
+        applied.append("fan typed % entry (1x)")
+    else:
+        failed.append(f"fan typed % entry: found {n} occurrence(s) of the fan label+value pair, expected 1")
+else:
+    applied.append("fan typed % entry (already patched)")
+
+# ---- chain node values: expose the hover title ----
+# The ENCODER node shows SIGNED movement (see trackEncoder in adapters/mmu.js); the lifetime odometer it
+# is derived from stays reachable as a tooltip rather than being lost. Two occurrences: preNodes and
+# postNodes, both built by the same chainNode().
+# GUARDED, and the needle is not a substring of the replacement's own needle position, but the guard is
+# cheaper to reason about than a count that changes as soon as it applies.
+if "n.title" not in src:
+    needle = "<div style={S(n.valStyle)}>{n.val}</div>"
+    n = src.count(needle)
+    if n == 2:
+        src = src.replace(needle, '<div title={n.title} style={S(n.valStyle)}>{n.val}</div>', 2)
+        applied.append("chain node title (2x)")
+    else:
+        failed.append(f"chain node title: found {n} occurrence(s) of the node value div, expected 2")
+else:
+    applied.append("chain node title (already patched)")
+
 # ---- spool card: "change filament" button ----
 # The gate's filament is edited in lib/GateEditor.jsx (Spoolman-authoritative). The design had no
 # affordance for it: the gate map was only reachable by opening Mainsail's MMU panel in a new tab, which

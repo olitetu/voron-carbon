@@ -95,6 +95,40 @@ export function trackFilamentUse(ps, gate) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------------
+// Signed encoder movement.
+//
+// Happy Hare's encoder is a single pulse counter, so `encoder_pos` is an unsigned ODOMETER: it only ever
+// grows, whichever way the filament went. A raw readout of it therefore can never show direction, which
+// is exactly why it read as inconsistent — it was 1879.8 mm of lifetime travel, not a movement.
+//
+// Direction comes from HH itself (`mmu.filament_direction`, +1 load / -1 unload), so we accumulate the
+// odometer's deltas WITH that sign for the current motion episode. Between episodes the last total is
+// held rather than zeroed: "the last thing that happened was -1059 mm" is the useful readout when idle.
+const ENC_IDLE_MS = 2500;        // no encoder change for this long ends the episode
+const ENC_MIN_STEP = 0.05;       // below the encoder's own resolution (0.956 mm/pulse) — noise
+const _enc = { last: null, signed: 0, quietAt: 0, dir: 0 };
+
+export function trackEncoder(pos, direction, now) {
+  if (pos === null) return null;
+  const dir = direction === -1 ? -1 : 1;
+  if (_enc.last === null) { _enc.last = pos; _enc.quietAt = now; _enc.dir = dir; return _enc.signed; }
+  const d = pos - _enc.last;
+  // A restart (or MMU_RESET) rewinds the odometer; start over rather than reporting a huge negative jump.
+  if (d < -1) { _enc.last = pos; _enc.signed = 0; _enc.quietAt = now; _enc.dir = dir; return 0; }
+  if (d > ENC_MIN_STEP) {
+    // A leg ends when motion stops OR when the direction flips. Without the direction reset the total
+    // merely counts DOWN through positive numbers during an unload — so a rewind never reads negative,
+    // which is the whole point of the readout. Each leg therefore starts from zero with its own sign.
+    if (now - _enc.quietAt > ENC_IDLE_MS || dir !== _enc.dir) _enc.signed = 0;
+    _enc.signed += d * dir;
+    _enc.last = pos;
+    _enc.quietAt = now;
+    _enc.dir = dir;
+  }
+  return _enc.signed;
+}
+
 export function mmuVals(ctx) {
   const c = ctx || {};
   const st = c.st || (c.store && c.store.state) || {};
@@ -157,10 +191,22 @@ export function mmuVals(ctx) {
     // An interactive control needs MORE contrast than body text, so it sits at T.dim (#8b98aa, 6.4:1)
     // with a real border and a slightly larger glyph. The card is only ~65px wide at narrow widths, so
     // a corner control is the only affordance that fits; it has to be legible rather than subtle.
+    // Kept in the top-right corner (owner's choice) but made unmissable: 20px chip, near-white glyph on
+    // a raised ground with a light border. #e8eef6 on #1d2734 is ~11:1 — it now reads as a button rather
+    // than a smudge. Two earlier passes failed by being subtle (2.67:1, then 5.9:1 but still 11px/grey).
     editStyle: i < NUM_GATES
-      ? "position:absolute; top:3px; right:3px; width:17px; height:17px; display:flex; align-items:center; justify-content:center; border-radius:3px; border:1px solid #2c3746; cursor:pointer; font-family:'JetBrains Mono',monospace; font-size:11px; line-height:1; color:#8b98aa; background:#141b25"
+      ? "position:absolute; top:2px; right:2px; width:20px; height:20px; display:flex; align-items:center; justify-content:center; border-radius:4px; border:1px solid #4a5666; cursor:pointer; font-family:'JetBrains Mono',monospace; font-size:12px; line-height:1; color:#e8eef6; background:#1d2734; box-shadow:0 1px 3px rgba(0,0,0,.5)"
       : "display:none",
-    color: s.color, op: s.op, pct: s.pct, name: s.name, mat: s.mat, gate: s.g,
+    color: s.color, op: s.op, pct: s.pct, name: s.name, gate: s.g,
+    // Material AND spool id on one line ("ABS · #43"). The id is the thing you cross-reference against
+    // Spoolman, so it cannot live at 8px/#4d5a6b (2.67:1) like the bare material did — it reads at
+    // T.mute now, and the id is dropped rather than shown as "#-1" when the gate has no spool.
+    mat: (function () {
+      const id = num((mmu.gate_spool_id || [])[i]);
+      const m = s.mat ? String(s.mat) : "";
+      return id !== null && id > 0 ? (m ? m + " · #" + id : "#" + id) : m;
+    })(),
+    matStyle: "font-family:'JetBrains Mono',monospace; font-size:8.5px; color:#6b7789; text-align:center; letter-spacing:.05em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis",
     dash: `${(C * s.fill).toFixed(1)} ${C.toFixed(1)}`,
     cardStyle: "background:" + (s.active ? "#150f10" : s.selected ? "#0f151d" : "#0d121a") +
       "; border:1px solid " + (s.active ? A : s.selected ? "#8b98aa" : "#1c2430") +
@@ -333,13 +379,23 @@ export function mmuVals(ctx) {
         : "display:none",
       nodeStyle: `width:9px; height:9px; border-radius:50%; flex:none; background:${reached && moving ? loadedColor : "#0b0f15"}; border:2px solid ${reached ? loadedColor : "#232d3a"}`,
       labStyle: "font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:.08em; white-space:nowrap; color:" + (reached ? "#8b98aa" : "#3d4859"),
-      valStyle: "font-family:'JetBrains Mono',monospace; font-size:9px; white-space:nowrap; color:" + (reached ? "#c9d3e0" : "#3d4859")
+      title: n.title || "",
+      valStyle: "font-family:'JetBrains Mono',monospace; font-size:9px; white-space:nowrap; color:" +
+        (n.valColor ? n.valColor : reached ? "#c9d3e0" : "#3d4859")
     };
   };
   const encPos = num(enc.encoder_pos) !== null ? enc.encoder_pos
     : num(mmu.encoder_pos) !== null ? mmu.encoder_pos
     : num((raw["mmu_encoder mmu_encoder"] || {}).encoder_pos);
-  const encoderOn = encPos === null ? "—" : Math.round(encPos) + " mm";
+  // Signed movement, not the odometer. Shown ALWAYS: the encoder measures whatever moves, so gating the
+  // readout on the filament having reached this chain node (n.on vs n.off) blanked it whenever the gate
+  // was unloaded — which read as "only works while printing".
+  const encMoved = trackEncoder(encPos, num(mmu.filament_direction), Date.now());
+  const encoderOn = encMoved === null ? "—"
+    : (encMoved > 0.5 ? "+" : "") + Math.round(encMoved) + " mm";
+  // teal advancing, amber rewinding, grey at rest — the sign is the point, so it is also colour-coded.
+  const encoderValColor = encMoved === null ? null
+    : Math.abs(encMoved) < 0.5 ? "#6b7789" : encMoved > 0 ? "#3ddcc4" : "#f0b429";
   const encoderBadge = sfsActive ? "buffer · " + sfs : "";
   const nd = nozzleDiameter(st, raw, api);
   const nozzleOn = nd !== null ? nd + " mm" : "loaded";
@@ -479,7 +535,20 @@ export function mmuVals(ctx) {
     }[phase]
       || (phase === "loading" ? "LOADING · " + Math.round(travel * 100) + "%"
       : phase === "unloading" ? "UNLOADING · " + Math.round(travel * 100) + "%"
-      : extruding ? "EXTRUDING · " + (num(activeFeed) === null ? "—" : activeFeed.toFixed(2)) + " mm/s" : "IDLE · NOT EXTRUDING"),
+      : extruding ? "EXTRUDING · " + (num(activeFeed) === null ? "—" : activeFeed.toFixed(2)) + " mm/s"
+      // Nothing is moving: say what the extruder IS rather than a bare "IDLE". Job state wins (it is the
+      // more useful fact mid-print), then the filament's resting position from Happy Hare's filament_pos
+      // (0 = UNLOADED ... 10 = LOADED); anything between the two is a real in-between, so name it.
+      : (function () {
+          const js = String(ps.state || "").toLowerCase();
+          if (js === "paused" || !!(raw.pause_resume || {}).is_paused) return "PAUSED";
+          if (js === "printing") return "PRINTING";
+          const fp = num(mmu.filament_pos);
+          if (fp === null) return "IDLE · NOT EXTRUDING";
+          if (fp >= 10) return "LOADED";
+          if (fp <= 0) return "UNLOADED";
+          return "PARTIALLY LOADED · POS " + fp;
+        })()),
     toggleExtruding: () => set(s => ({ extruding: !(s ? s.extruding !== false : true) })),
     extrudeChipStyle: "display:flex; align-items:center; gap:6px; padding:4px 9px; border-radius:3px; cursor:pointer; white-space:nowrap; font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:.08em; " +
       (phase !== "idle" ? "border:1px solid #3a2f14; background:#14100a; color:#f0b429"
@@ -504,7 +573,9 @@ export function mmuVals(ctx) {
       style: "padding:6px 11px; border:1px solid " + (i === all.length - 1 ? "#4a2318" : "#1c2430") + "; background:" + (i === all.length - 1 ? "#1a0e09" : "#0d121a") +
         "; border-radius:4px; font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.1em; color:" + (i === all.length - 1 ? A : "#8b98aa") + "; cursor:pointer; transition:.12s"
     })),
-    preNodes: [chainNode({ at: .30, from: 0, label: "ENCODER", on: encoderOn, off: "—", w: 62, badge: encoderBadge, last: false })],
+    preNodes: [chainNode({ at: .30, from: 0, label: "ENCODER", on: encoderOn, off: encoderOn, w: 62,
+      badge: encoderBadge, last: false, valColor: encoderValColor,
+      title: encPos === null ? "" : "Lifetime encoder travel: " + Math.round(encPos) + " mm" })],
     postNodes: [chainNode({ at: 1, from: .75, label: "NOZZLE", on: nozzleOn, off: "empty", w: 56, last: true })],
     // "Edit gate map" opens the in-app gate editor for the SELECTED gate. It used to dispatch GATE_MAP,
     // which opened Mainsail's MMU panel in a new tab — dead inside Orca's webview, and a dependency on

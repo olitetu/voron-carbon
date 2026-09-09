@@ -24,7 +24,7 @@ import React from "react";
 import { Modal, Btn, Chip, Label, Val, Row, Divider, Input, Toggle, Confirm, T, mono, fmtDate } from "./design.jsx";
 import { S, Hv } from "./ui.js";
 import { useStore } from "./useStore.js";
-import { useSpoolList, filterSpools, swatch, grams, metres, whenSeconds, spoolName, fillOf, num, EMPTY_COLOR, LOW } from "./spools.js";
+import { useSpoolList, filterSpools, materialsOf, swatch, grams, metres, whenSeconds, spoolName, fillOf, num, EMPTY_COLOR, LOW } from "./spools.js";
 
 const R = 25, C = 2 * Math.PI * R;
 
@@ -58,6 +58,7 @@ export default function GateEditor({ open, gate, store, api, act, onClose }) {
   const list = useSpoolList(api, st, { enabled: open });
   const [picking, setPicking] = React.useState(false);
   const [q, setQ] = React.useState("");
+  const [mat, setMat] = React.useState(null);      // material facet, null = all
   const [pending, setPending] = React.useState(null);   // { id } awaiting the mid-print confirm
   const [speed, setSpeed] = React.useState(null);       // local while dragging; null = follow the store
 
@@ -81,12 +82,15 @@ export default function GateEditor({ open, gate, store, api, act, onClose }) {
   const printing = ["printing", "paused"].indexOf((raw.print_stats || {}).state) >= 0;
   const gateIds = Array.isArray(mmu.gate_spool_id) ? mmu.gate_spool_id : [];
   const rows = React.useMemo(
-    () => filterSpools(list.all, q, { activeId: st.activeSpool || null, gateIds }),
-    [list.all, q, st.activeSpool, mmu.gate_spool_id]
+    () => filterSpools(list.all, q, { activeId: st.activeSpool || null, gateIds, material: mat }),
+    [list.all, q, mat, st.activeSpool, mmu.gate_spool_id]
   );
+  // Facets come from the list itself rather than a hardcoded material table — a Spoolman with only ABS
+  // should not offer a PLA filter, and a new material appears without a code change.
+  const facets = React.useMemo(() => materialsOf(list.all), [list.all]);
 
   // Reset the transient bits whenever the dialog opens on a different gate.
-  React.useEffect(() => { setPicking(false); setQ(""); setPending(null); setSpeed(null); }, [gate, open]);
+  React.useEffect(() => { setPicking(false); setQ(""); setMat(null); setPending(null); setSpeed(null); }, [gate, open]);
 
   const call = (fn, ...args) => (act && typeof act[fn] === "function" ? act[fn](...args) : undefined);
 
@@ -157,6 +161,18 @@ export default function GateEditor({ open, gate, store, api, act, onClose }) {
     {picking ? <div style={S(`margin-top:10px; border:1px solid ${T.line}; border-radius:5px; overflow:hidden`)}>
       <div style={S(`padding:7px; border-bottom:1px solid ${T.line}`)}>
         <Input value={q} onChange={e => setQ(e.target.value)} placeholder="name · material · vendor · id" style="width:100%" />
+        {/* Material facets, directly under the search box. ALL is a real option rather than "deselect
+            the active chip", so there is always one obvious way back to the full list. */}
+        {facets.length > 1 ? <Row gap={4} style="margin-top:7px; flex-wrap:wrap">
+          {[{ material: null, count: list.all.length }].concat(facets).map(f => {
+            const on = (f.material || null) === mat;
+            return <Hv key={f.material || "ALL"} as="div" onClick={() => setMat(f.material || null)}
+              style={`padding:2px 7px; border-radius:3px; cursor:pointer; border:1px solid ${on ? T.accent : T.line2}; background:${on ? "rgba(255,90,51,.14)" : "transparent"}; ${mono(9, `letter-spacing:.08em; color:${on ? T.text : T.dim}`)}`}
+              hover={on ? "" : `border-color:#4a5666; color:${T.text}`}>
+              {(f.material || "ALL") + " " + f.count}
+            </Hv>;
+          })}
+        </Row> : null}
       </div>
       <div style={S("max-height:210px; overflow-y:auto; overscroll-behavior:contain")}>
         {list.loading && !rows.length

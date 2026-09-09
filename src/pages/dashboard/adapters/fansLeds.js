@@ -46,11 +46,24 @@ export function fansLedsVals(ctx) {
     const o = raw[def.obj] || {};
     const pct = isNum(o.speed) ? Math.round(Math.min(1, Math.max(0, o.speed)) * 100) : null;
     const rpm = isNum(o.rpm) ? Math.round(o.rpm) : null;
+    // A settable fan gets a typed field, like the LED rows already had: dragging a 3 px bar cannot
+    // express "37 %", and heater/controller fans stay read-only text because Klipper owns their speed.
+    const editable = !!(def.settable && act.setFan);
     return {
       k: row[0],
+      // `v` still carries the whole readout for read-only fans (and for a settable fan with no reading yet).
       v: pct === null ? "—" : pct + " %" + (rpm !== null ? " · " + rpm + " rpm" : ""),
       bar: bar(pct === null ? 0 : pct, pct === null ? "#3d4859" : row[1]),
-      set: def.settable && act.setFan ? barPick(p => setFan(row[0], p)) : undefined
+      set: editable ? barPick(p => setFan(row[0], p)) : undefined,
+      // setFan takes 0..100 (same units barPick produces), so the field commits a plain percent.
+      pctField: editable && pct !== null
+        ? field("fan_" + row[0], String(pct), v => setFan(row[0], Math.max(0, Math.min(100, Math.round(v)))))
+        : null,
+      pctInputStyle: "width:34px; text-align:right; background:#0d121a; border:1px solid #1c2430; border-radius:3px; padding:1px 4px; outline:none; font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#e8eef6",
+      pctSuffixStyle: "font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#6b7789",
+      // rpm is a measurement, not an input — kept beside the field when the fan reports one.
+      rpmLabel: rpm !== null ? rpm + " rpm" : "",
+      rpmStyle: "font-family:'JetBrains Mono',monospace; font-size:9.5px; color:#6b7789"
     };
   });
 
