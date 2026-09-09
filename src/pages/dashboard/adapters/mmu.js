@@ -311,7 +311,22 @@ export function mmuVals(ctx) {
   const planTotalG = planW ? planW.reduce((a, w) => a + (num(w) || 0), 0) : 0;
   const usePlan = !!planW && planTotalG > 0 && fuse.partial;
 
-  let usedKeys, weightOf, unitOf;
+  // Both units, always. The two sources give different quantities — the slicer plan is GRAMS per tool,
+  // live integration is MILLIMETRES of filament_used — so whichever we have is converted to the other
+  // through the gate's own Spoolman record:
+  //     grams = mm * pi*(d/2)^2 / 1000 * density        (mm^3 -> cm^3 -> g)
+  // Diameter and density come from the spool assigned to that gate, so a 1.75 mm ABS at 1.04 g/cm^3 and
+  // a 2.85 mm PLA are each converted with their own numbers. Falls back to 1.75 / 1.24 when Spoolman has
+  // no record for the gate, and `estimated` marks the whole row so a guess never reads as a measurement.
+  const DEF_DIA = 1.75, DEF_DENSITY = 1.24;
+  const gramsPerMm = g => {
+    const id = num((mmu.gate_spool_id || [])[g]);
+    const f = (id !== null && id > 0 && (st.spools || {})[id] && (st.spools || {})[id].filament) || null;
+    const dia = num(f && f.diameter) || DEF_DIA;
+    const den = num(f && f.density) || DEF_DENSITY;
+    return Math.PI * (dia / 2) * (dia / 2) / 1000 * den;   // g per mm of filament
+  };
+  let usedKeys, gramsOf, mmOf, estimated;
   if (usePlan) {
     // tool index -> gate (identity unless the TTG map has been remapped)
     const byGate = {};
@@ -321,14 +336,21 @@ export function mmuVals(ctx) {
       const g = ttg && Number.isInteger(ttg[tool]) ? ttg[tool] : tool;
       byGate[String(g)] = (byGate[String(g)] || 0) + grams;
     });
-    usedKeys = Object.keys(byGate).sort((a, b) => (+a) - (+b));
-    weightOf = k => byGate[k];
-    unitOf = v => v.toFixed(1) + " g";
+    usedKeys = Object.keys(byGate);
+    gramsOf = k => byGate[k];
+    mmOf = k => byGate[k] / (gramsPerMm(+k) || 1);
+    estimated = true;
   } else {
-    usedKeys = Object.keys(fuse.used).filter(k => (fuse.used[k] || 0) > 0).sort((a, b) => (+a) - (+b));
-    weightOf = k => fuse.used[k];
-    unitOf = v => (v / 1000).toFixed(2) + " m";
+    usedKeys = Object.keys(fuse.used).filter(k => (fuse.used[k] || 0) > 0);
+    gramsOf = k => fuse.used[k] * gramsPerMm(+k);
+    mmOf = k => fuse.used[k];
+    estimated = false;
   }
+  // RANKED BY GRAMS, heaviest first — the ordering the owner asked for. It was gate index, which buried
+  // the filament that actually dominated the job (Black 112.4 g sat third behind White 36.6 g).
+  usedKeys = usedKeys.sort((a, b) => gramsOf(b) - gramsOf(a) || (+a) - (+b));
+  const weightOf = gramsOf;
+  const unitOf = (v, k) => gramsOf(k).toFixed(1) + " g · " + (mmOf(k) / 1000).toFixed(2) + " m";
   const usedTotal = usedKeys.reduce((a, k) => a + weightOf(k), 0);
   const filamentUse = usedKeys.map(k => {
     const g = +k, pct = usedTotal > 0 ? weightOf(k) / usedTotal * 100 : 0;
@@ -339,7 +361,7 @@ export function mmuVals(ctx) {
     return {
       name: info.name || "—",
       gate: g === BYPASS ? "BP" : known ? "G" + g : "G?",
-      len: unitOf(weightOf(k)),
+      len: unitOf(weightOf(k), k),
       pct: Math.round(pct) + "%",
       barStyle: `width:${pct.toFixed(1)}%; height:100%; background:${color}; ` +
         (on ? `box-shadow:0 0 10px ${color}` : "opacity:.85"),

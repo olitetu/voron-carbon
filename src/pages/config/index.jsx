@@ -869,7 +869,11 @@ export default function Page({ store, api }) {
     return <React.Fragment key={g.id}>{head}{body}</React.Fragment>;
   };
 
-  return <div style={S("flex:1; display:grid; gap:10px; padding:10px; align-content:start; grid-template-columns:minmax(300px,360px) minmax(520px,1fr)")}>
+  // Fills the viewport. `align-content:start` collapsed both columns to their content height, so the
+  // page ended part-way down the screen with dead space under it and the editor was shorter than it
+  // needed to be. One full-height row + min-height:0 (so the children may actually shrink and scroll
+  // instead of forcing the grid taller) is what the SPOOLMAN page already does.
+  return <div style={S("flex:1; min-height:0; display:grid; gap:10px; padding:10px; align-content:stretch; grid-template-rows:minmax(0,1fr); grid-template-columns:minmax(300px,360px) minmax(520px,1fr)")}>
     <Panel title="CONFIG FILES" accent={T.info} flat style="align-self:start"
       right={<Row gap={8}>
         {listing.data && <Label>{files.length + " FILES · " + listing.data.dirs + " DIRS"}</Label>}
