@@ -43,7 +43,7 @@ export class DashboardLogic extends React.Component {
   state = {
     // menus / overlays
     ledPicker: null, mmuMenuOpen: false, macroPickerOpen: false, servoMenuOpen: false,
-    soakMenuOpen: false, macroPickerFor: null, iconPickFor: null, mapOpen: null,
+    soakMenuOpen: false, macroPickerFor: null, iconPickFor: null, mapOpen: null, recoverMenuOpen: false,
     excludeOpen: false, consoleExpanded: false,
     // Gate editor: the gate number whose "change filament" dialog is open, or null. Lives here rather
     // than in the MMU adapter because the dialog is a sibling of Template, not part of the panel markup.
@@ -84,6 +84,8 @@ export class DashboardLogic extends React.Component {
   }
 
   componentDidMount() {
+    this._onEsc = e => { if (e.key === "Escape") this.closePops(); };
+    window.addEventListener("keydown", this._onEsc);
     this.measure();
     window.addEventListener("resize", this.measure);
     // Drop anywhere: window-level, so a file can land on the nav rail, the top bar or any panel. A page with its
@@ -110,6 +112,7 @@ export class DashboardLogic extends React.Component {
   }
 
   componentWillUnmount() {
+    if (this._onEsc) window.removeEventListener("keydown", this._onEsc);
     window.removeEventListener("resize", this.measure);
     window.removeEventListener("dragenter", this.onDragEnter);
     window.removeEventListener("dragover", this.onDragOver);
@@ -265,6 +268,32 @@ export class DashboardLogic extends React.Component {
     };
   }
 
+  // ---- dismissing popovers -------------------------------------------------------------
+  // Every dropdown in this app used to stay open until its own toggle was clicked again, so opening the
+  // LED picker and walking away left it hanging over the panel. Rather than tag each menu and its
+  // trigger with data attributes (Template.jsx is generated, so that is a patch rule per menu), one
+  // invisible scrim renders behind the menus whenever any is open: a click anywhere else lands on it
+  // and closes everything. Menus sit at z-index 40, the scrim at 30, so the menus stay clickable.
+  //
+  // The first click outside therefore dismisses rather than acting, which is how popovers behave
+  // everywhere. Escape does the same. Modals are NOT in here — Modal (design.jsx) owns its own scrim.
+  static POPS = ["ledPicker", "mmuMenuOpen", "macroPickerOpen", "servoMenuOpen", "soakMenuOpen",
+    "macroPickerFor", "iconPickFor", "mapOpen", "recoverMenuOpen"];
+
+  anyPopOpen() {
+    return DashboardLogic.POPS.some(k => {
+      const v = this.state[k];
+      return v !== null && v !== undefined && v !== false;
+    });
+  }
+
+  closePops = () => {
+    if (!this.anyPopOpen()) return;
+    const patch = {};
+    for (const k of DashboardLogic.POPS) patch[k] = (typeof this.state[k] === "boolean") ? false : null;
+    this.setState(patch);
+  };
+
   // ---- view-model ---------------------------------------------------------------------
   renderVals() {
     const ctx = {
@@ -308,6 +337,10 @@ export class DashboardLogic extends React.Component {
       }
     }
     V.page = this.props.page;
+    V.popScrimStyle = this.anyPopOpen()
+      ? "position:fixed; inset:0; z-index:30; background:transparent"
+      : "display:none";
+    V.closePops = this.closePops;
     if (typeof window !== "undefined") {
       window.__V = V;                                    // dev aid: inspect the view-model in devtools
       const p = (window.__perf = window.__perf || { renders: 0, ms: 0, max: 0, emits: 0, byAdapter: {} });

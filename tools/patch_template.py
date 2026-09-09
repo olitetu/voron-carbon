@@ -354,6 +354,44 @@ if "sp.checkStyle" not in src:
 else:
     applied.append("spool card check gate (already patched)")
 
+# ---- TOOLHEAD button row: per-button style + optional glyph ----
+# The row grew from 4 buttons (HOME/XY/QGL/MESH) to 7 (+ PARK, CARTO CAL, MOTORS), and MOTORS OFF must
+# not look like another homing button — it drops the steppers and loses position, so it carries the warn
+# tint. That needs the adapter to own the style instead of the design hardcoding one for all of them.
+if "b.style" not in src:
+    needle = ('onClick={b.go} style={S("background:#0d121a; border:1px solid #1c2430; border-radius:4px; '
+              'padding:7px 0; text-align:center; font-family:\'JetBrains Mono\',monospace; font-size:10px; '
+              'letter-spacing:.06em; color:#8b98aa; cursor:pointer; transition:transform .07s ease, '
+              'border-color .12s")}>{b.t}</Hv>')
+    n = src.count(needle)
+    if n == 1:
+        repl = ('onClick={b.go} style={S((b.style || "background:#0d121a; border:1px solid #1c2430; '
+                'border-radius:4px; padding:7px 0; text-align:center; font-family:\'JetBrains Mono\',monospace; '
+                'font-size:10px; letter-spacing:.06em; color:#8b98aa") + "; cursor:pointer; '
+                'transition:transform .07s ease, border-color .12s")}>'
+                '{b.glyph ? <span style={S("margin-right:4px; opacity:.85")}>{b.glyph}</span> : null}{b.t}</Hv>')
+        src = src.replace(needle, repl, 1)
+        applied.append("toolhead button style + glyph (1x)")
+    else:
+        failed.append(f"toolhead button style: found {n} occurrence(s) of the hardcoded button, expected 1")
+else:
+    applied.append("toolhead button style + glyph (already patched)")
+
+# ---- popover scrim: clicking outside an open menu closes it ----
+# Menus sit at z-index 40; this transparent scrim sits at 30 and only exists while something is open, so
+# a click anywhere else lands on it and dismisses. One insertion instead of tagging every menu and every
+# trigger with data attributes (Template.jsx is generated — that would be a patch rule per menu).
+if "V.popScrimStyle" not in src:
+    needle = '<input ref={V.uploadInputRef} type="file"'
+    n = src.count(needle)
+    if n == 1:
+        src = src.replace(needle, '<div onClick={V.closePops} style={S(V.popScrimStyle)}></div>' + needle, 1)
+        applied.append("popover scrim (1x)")
+    else:
+        failed.append(f"popover scrim: found {n} occurrence(s) of the upload input, expected 1")
+else:
+    applied.append("popover scrim (already patched)")
+
 # ---- chain node values: expose the hover title ----
 # The ENCODER node shows SIGNED movement (see trackEncoder in adapters/mmu.js); the lifetime odometer it
 # is derived from stays reachable as a tooltip rather than being lost. Two occurrences: preNodes and

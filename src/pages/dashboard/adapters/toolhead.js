@@ -5,7 +5,9 @@
 //   axes      ← raw.toolhead.position[0..2] + raw.toolhead.homed_axes ("xyz"); v shows "?" for an unhomed axis (design) and "—"
 //               when Klipper has not reported a position yet. `max` / the bar's 100 % = the printer's travel from
 //               raw.toolhead.axis_maximum (335 / 355 / 320 on this Voron), falling back to the contract's 350 / 350 / 310.
-//   homeBtns  → act.home('HOME' | 'XY' | 'QGL' | 'MESH')                   (G28 · G28 X Y · QUAD_GANTRY_LEVEL · BED_MESH_CALIBRATE)
+//   homeBtns  → act.home('HOME'|'XY'|'QGL'|'MESH'|'PARK'|'CARTO'|'MOTORS')
+//               SMART_HOME · G28 X Y · QUAD_GANTRY_LEVEL · BED_MESH_CALIBRATE · BLOBIFIER_PARK ·
+//               CARTOGRAPHER_CALIBRATE · M84. Every one is refused while printing (actions/toolhead.js).
 //   jogRows   → act.jog(axis, ±step)  X/Y 100·50·1, Z 50·10·1; the centre axis cell homes THAT axis only (X → G28 X, …).
 //               Was (Z → HOME, X/Y → XY) to match the design mockup, but a per-axis button that homes all three is a
 //               surprise on a printer mid-setup — and act.home already supports the X / Y / Z kinds (see actions/toolhead.js).
@@ -20,7 +22,12 @@ export const JOG_STEPS = [["X", [100, 50, 1]], ["Y", [100, 50, 1]], ["Z", [50, 1
 /** Design Z-offset nudge buttons. */
 export const Z_STEPS = [-0.025, -0.005, 0.005, 0.025];
 /** Design home buttons (left → right). */
-export const HOME_BTNS = ["HOME", "XY", "QGL", "MESH"];
+// Seven buttons in a 4-column grid, so the row wraps to two — the "elongated" toolhead section.
+// HOME is SMART_HOME (see actions/toolhead.js), PARK is BLOBIFIER_PARK, CARTO is the Cartographer
+// response-curve calibration, MOTORS is a plain M84.
+export const HOME_BTNS = ["HOME", "XY", "QGL", "MESH", "PARK", "CARTO", "MOTORS"];
+const BTN_LABEL = { CARTO: "CARTO CAL", MOTORS: "MOTORS" };
+const BTN_GLYPH = { MOTORS: "\u2699" };     // gear — the only one that gets an icon, being the odd action out
 export const AXES = ["X", "Y", "Z"];
 
 /** Fallback for ctx.field when the logic host does not provide one — same code as the design's field(); edits live in ui.edits via ctx.set. */
@@ -105,7 +112,18 @@ export function toolheadVals(ctx) {
     };
   });
 
-  const homeBtns = HOME_BTNS.map(t => ({ t, go: () => home(t) }));
+  const homeBtns = HOME_BTNS.map(k => ({
+    t: BTN_LABEL[k] || k,
+    glyph: BTN_GLYPH[k] || "",
+    go: () => home(k),
+    // MOTORS OFF is the disruptive one in this row — it drops the steppers and loses position — so it
+    // carries the warn tint rather than looking like another homing button.
+    style: "background:" + (k === "MOTORS" ? "#14100a" : "#0d121a") +
+      "; border:1px solid " + (k === "MOTORS" ? "#3a2f14" : "#1c2430") +
+      "; border-radius:4px; padding:7px 0; text-align:center; cursor:pointer; white-space:nowrap;" +
+      " font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:.08em; color:" +
+      (k === "MOTORS" ? "#f0b429" : "#8b98aa")
+  }));
 
   const jogRows = JOG_STEPS.map(row => {
     const ax = row[0], st = row[1];

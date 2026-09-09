@@ -27,13 +27,27 @@ export const Z_OFFSET_LIMIT = 5;
 export const Z_STEP_LIMIT = 1;
 
 export const HOME_CMDS = {
-  HOME: "G28", XY: "G28 X Y", X: "G28 X", Y: "G28 Y", Z: "G28 Z",
-  QGL: "QUAD_GANTRY_LEVEL", MESH: "BED_MESH_CALIBRATE"
+  // HOME is SMART_HOME, not G28: "Home + QGL when needed, otherwise just re-home Z" (its own help text).
+  // A bare G28 on a Voron 2.4 leaves the gantry unleveled, and G32 re-levels every single time even when
+  // nothing moved. SMART_HOME is this printer's own macro and does the right one of the two.
+  HOME: "SMART_HOME", XY: "G28 X Y", X: "G28 X", Y: "G28 Y", Z: "G28 Z",
+  QGL: "QUAD_GANTRY_LEVEL", MESH: "BED_MESH_CALIBRATE",
+  // PARK is the Blobifier's park position — where this printer stows the toolhead.
+  PARK: "BLOBIFIER_PARK",
+  CARTO: "CARTOGRAPHER_CALIBRATE",
+  // M84 is a NATIVE Klipper command, so it does NOT appear in printer.gcode.commands (that catalogue
+  // lists only extended/named commands — 316 entries here, of which the only M-code is M486). Never
+  // capability-gate it against the catalogue: has() would say "missing" for a command that works.
+  MOTORS: "M84"
 };
 const HOME_ALIASES = {
   home: "HOME", all: "HOME", xyz: "HOME", g28: "HOME",
   xy: "XY", g28xy: "XY", x: "X", y: "Y", z: "Z",
-  qgl: "QGL", quadgantrylevel: "QGL", mesh: "MESH", bedmesh: "MESH", bedmeshcalibrate: "MESH"
+  qgl: "QGL", quadgantrylevel: "QGL", mesh: "MESH", bedmesh: "MESH", bedmeshcalibrate: "MESH",
+  smarthome: "HOME", g32: "HOME",
+  park: "PARK", blobifierpark: "PARK",
+  carto: "CARTO", cartocal: "CARTO", cartographercalibrate: "CARTO",
+  motors: "MOTORS", motorsoff: "MOTORS", m84: "MOTORS", m18: "MOTORS"
 };
 
 /** Finite number or null (Moonraker fields can be null/undefined before the first status update). */
@@ -263,9 +277,14 @@ export function makeToolheadActions({ api, store, log } = {}) {
         say("QGL not applied — the mesh will be probed on an unleveled gantry", "warn");
       }
     }
-    const intent = { HOME: " — homing all axes", XY: " — homing X/Y", X: " — homing X", Y: " — homing Y", Z: " — homing Z", QGL: " — leveling gantry", MESH: " — probing bed mesh" }[k];
+    const intent = { HOME: " — smart home (homes, and levels the gantry only if needed)", XY: " — homing X/Y",
+      X: " — homing X", Y: " — homing Y", Z: " — homing Z", QGL: " — leveling gantry", MESH: " — probing bed mesh",
+      PARK: " — parking the toolhead at the Blobifier", CARTO: " — calibrating the Cartographer response curve",
+      MOTORS: " — releasing all steppers" }[k];
     say(cmd + intent);
-    const done = { HOME: "G28 — all axes homed", XY: "G28 X Y — X/Y homed", X: "G28 X — X homed", Y: "G28 Y — Y homed", Z: "G28 Z — Z homed", QGL: "QUAD_GANTRY_LEVEL complete", MESH: "BED_MESH_CALIBRATE complete" }[k];
+    const done = { HOME: "SMART_HOME complete", XY: "G28 X Y — X/Y homed", X: "G28 X — X homed",
+      Y: "G28 Y — Y homed", Z: "G28 Z — Z homed", QGL: "QUAD_GANTRY_LEVEL complete", MESH: "BED_MESH_CALIBRATE complete",
+      PARK: "Toolhead parked", CARTO: "CARTOGRAPHER_CALIBRATE complete", MOTORS: "M84 — steppers released" }[k];
     return run(cmd, done, true);
   }
 
