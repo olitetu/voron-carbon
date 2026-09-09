@@ -185,6 +185,15 @@ export function mmuVals(ctx) {
     // onClick that SELECTS the gate, so this must swallow the event or clicking edit would also move the
     // selector. Bypass has no gate map entry, hence no button.
     edit: i < NUM_GATES ? (e => { if (e && e.stopPropagation) e.stopPropagation(); set({ gateEditor: i }); }) : null,
+    // CHECK GATE for this gate alone. Like `edit`, it must swallow the event: the card's own onClick
+    // selects the gate, and checking a gate you did not mean to select is worse than useless.
+    check: i < NUM_GATES ? (e => { if (e && e.stopPropagation) e.stopPropagation(); call("checkGate", i); }) : null,
+    checkTitle: i < NUM_GATES
+      ? "MMU_CHECK_GATE GATE=" + i + " — inspect this gate and mark availability" + (printing ? " (refused while printing)" : "")
+      : "",
+    checkStyle: i < NUM_GATES
+      ? "position:absolute; top:2px; left:2px; width:20px; height:20px; display:flex; align-items:center; justify-content:center; border-radius:4px; border:1px solid #4a5666; cursor:pointer; font-family:'JetBrains Mono',monospace; font-size:11px; line-height:1; color:#e8eef6; background:#1d2734; box-shadow:0 1px 3px rgba(0,0,0,.5)"
+      : "display:none",
     editTitle: i < NUM_GATES ? "Change the filament in gate " + i : "",
     // Contrast, not decoration: this shipped at 9px in #4d5a6b, which is 2.67:1 on the card ground and
     // effectively invisible — the same ratio the owner had already rejected for the temperature labels.
@@ -539,6 +548,38 @@ export function mmuVals(ctx) {
       (servo === "down"
         ? "border:1px solid #1c3d37; background:#0f2320; color:#3ddcc4"
         : "border:1px solid #3a2f14; background:#14100a; color:#f0b429"),
+    // ---- selector HOME, beside the servo status -----------------------------------------------------
+    // Happy Hare refuses most gate work until the selector is homed, so its state belongs in the header
+    // next to the servo rather than behind the ⋮ menu. The chip IS the readout: teal HOMED, amber NOT
+    // HOMED (pulsing, because it is a blocker), grey when the MMU is not reporting.
+    mmuHomeChip: (function () {
+      const homed = mmu.is_homed;
+      const known = typeof homed === "boolean";
+      const ok = homed === true;
+      return {
+        t: !known ? "HOME ?" : ok ? "HOMED" : "NOT HOMED",
+        go: () => call("mmuHome"),
+        title: (!known ? "Selector state unknown" : ok ? "Selector is homed and knows its position" : "Selector position is unknown")
+          + " — click to run MMU_HOME" + (printing ? " (refused while printing)" : ""),
+        dot: "width:5px; height:5px; border-radius:50%; background:" + (!known ? "#4d5a6b" : ok ? "#3ddcc4" : "#f0b429")
+          + (known && !ok ? "; animation:vPulse 1.2s ease-in-out infinite" : ""),
+        style: "display:flex; align-items:center; gap:5px; padding:3px 8px; border-radius:3px; cursor:pointer; white-space:nowrap;"
+          + " font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:.08em;"
+          + " border:1px solid " + (!known ? "#1c2430" : ok ? "#1d3a35" : "#3a2f14")
+          + "; background:" + (!known ? "#0d121a" : ok ? "#0c1614" : "#14100a")
+          + "; color:" + (!known ? "#6b7789" : ok ? "#3ddcc4" : "#f0b429")
+      };
+    })(),
+    // ---- check every gate ---------------------------------------------------------------------------
+    mmuCheckAllChip: {
+      t: "CHECK ALL",
+      go: () => call("checkGates"),
+      title: "MMU_CHECK_GATES — inspect every gate and mark availability"
+        + (printing ? " (refused while printing)" : ""),
+      style: "display:flex; align-items:center; gap:5px; padding:3px 8px; border-radius:3px; cursor:pointer; white-space:nowrap;"
+        + " font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:.08em; border:1px solid #1c2430;"
+        + " background:#0d121a; color:#8b98aa"
+    },
     toggleServoMenu: () => set(s => ({ servoMenuOpen: !(s && s.servoMenuOpen) })),
     servoMenuStyle: ui.servoMenuOpen
       ? "position:absolute; right:0; top:24px; z-index:40; min-width:126px; padding:4px; border:1px solid #1c2430; border-radius:5px; background:#0d121a; box-shadow:0 10px 24px rgba(0,0,0,.65); display:flex; flex-direction:column; gap:1px; animation:vRise .14s ease both"
@@ -643,8 +684,26 @@ export function mmuVals(ctx) {
     // CUT runs EREC_CUTTER_ACTION — the cutter is at the MMU, not the toolhead (tip forming is a separate
     // button). EJECT dropped: UNLOAD parks the filament at the gate, which is the operation actually wanted;
     // EJECT pushes it fully out of the MMU and was only ever a slower way to have to reload.
+    // RECOVER opens a menu instead of firing: with no toolhead sensor, HH often cannot work the position
+    // out on its own, and the useful answer is the one the operator can see (LOADED=1 / LOADED=0).
+    toggleRecoverMenu: () => set(s => ({ recoverMenuOpen: !(s && s.recoverMenuOpen) })),
+    recoverMenuStyle: ui.recoverMenuOpen
+      ? "position:absolute; left:0; bottom:30px; z-index:40; min-width:184px; padding:4px; border:1px solid #1c2430; border-radius:5px; background:#0d121a; box-shadow:0 10px 24px rgba(0,0,0,.65); display:flex; flex-direction:column; gap:1px; animation:vRise .14s ease both"
+      : "display:none",
+    recoverOptions: [
+      ["From sensors", null, "MMU_RECOVER — let Happy Hare work it out"],
+      ["Filament LOADED", 1, "MMU_RECOVER LOADED=1 — assert filament is at the nozzle"],
+      ["Filament UNLOADED", 0, "MMU_RECOVER LOADED=0 — assert filament is back at the gate"]
+    ].map(row => ({
+      t: row[0], title: row[2],
+      go: () => { set({ recoverMenuOpen: false }); call("mmuRecover", row[1]); },
+      style: "padding:5px 8px; border-radius:3px; cursor:pointer; font-family:'JetBrains Mono',monospace; font-size:9.5px; white-space:nowrap; color:#8b98aa"
+    })),
     mmuActions: ["PRELOAD", "CUT", "CHECK", "RECOVER", "UNLOAD", "LOAD"].map((t, i, all) => ({
-      t, go: () => call("mmuAction", t),
+      t,
+      go: () => (t === "RECOVER"
+        ? set(s2 => ({ recoverMenuOpen: !(s2 && s2.recoverMenuOpen) }))
+        : call("mmuAction", t)),
       style: "padding:6px 11px; border:1px solid " + (i === all.length - 1 ? "#4a2318" : "#1c2430") + "; background:" + (i === all.length - 1 ? "#1a0e09" : "#0d121a") +
         "; border-radius:4px; font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.1em; color:" + (i === all.length - 1 ? A : "#8b98aa") + "; cursor:pointer; transition:.12s"
     })),

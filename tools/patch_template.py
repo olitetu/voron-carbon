@@ -292,6 +292,68 @@ if "sp.useRowStyle" not in src:
 else:
     applied.append("spool card print progress (already patched)")
 
+# ---- MMU header: selector HOME + CHECK ALL, beside the servo status ----
+# Happy Hare refuses most gate work until the selector is homed, so that state belongs in the header
+# next to the servo, not behind the ⋮ menu. The chip is both readout and control.
+if "V.mmuHomeChip" not in src:
+    needle = ('<span style={S("position:relative; display:flex; align-items:center")}>'
+              '<Hv as="span" active="transform:translateY(1px)" onClick={V.toggleServoMenu}')
+    n = src.count(needle)
+    if n == 1:
+        chips = ('<Hv as="span" hover="border-color:#4a5666" active="transform:translateY(1px)" '
+                 'title={V.mmuHomeChip.title} onClick={V.mmuHomeChip.go} style={S(V.mmuHomeChip.style)}>'
+                 '<span style={S(V.mmuHomeChip.dot)}></span>{V.mmuHomeChip.t}</Hv>'
+                 '<Hv as="span" hover="border-color:#4a5666; color:#e8eef6" active="transform:translateY(1px)" '
+                 'title={V.mmuCheckAllChip.title} onClick={V.mmuCheckAllChip.go} style={S(V.mmuCheckAllChip.style)}>'
+                 '{V.mmuCheckAllChip.t}</Hv>')
+        src = src.replace(needle, chips + needle, 1)
+        applied.append("mmu home + check all chips (1x)")
+    else:
+        failed.append(f"mmu home chips: found {n} occurrence(s) of the servo chip, expected 1")
+else:
+    applied.append("mmu home + check all chips (already patched)")
+
+# ---- MMU actions row: RECOVER opens a menu ----
+# With no toolhead sensor HH often cannot deduce the filament position, so RECOVER offers the answer the
+# operator can actually see (LOADED=1 / LOADED=0) instead of firing blind. The row needs position:relative
+# so the menu anchors to it.
+if "V.recoverOptions" not in src:
+    needle = ('<div style={S("margin-left:auto; display:flex; gap:5px")}>{(V.mmuActions || []).map((a, _i8) => ('
+              '<React.Fragment key={_i8}><Hv as="div" hover="border-color:#ff5a33; color:#ff5a33" '
+              'active="transform:translateY(1px)" onClick={a.go} style={S(a.style)}>{a.t}</Hv></React.Fragment>))}</div>')
+    n = src.count(needle)
+    if n == 1:
+        repl = ('<div style={S("margin-left:auto; display:flex; gap:5px; position:relative")}>'
+                '{(V.mmuActions || []).map((a, _i8) => (<React.Fragment key={_i8}>'
+                '<Hv as="div" hover="border-color:#ff5a33; color:#ff5a33" active="transform:translateY(1px)" '
+                'onClick={a.go} style={S(a.style)}>{a.t}</Hv></React.Fragment>))}'
+                '<div style={S(V.recoverMenuStyle)}>{(V.recoverOptions || []).map((o, _i11) => ('
+                '<React.Fragment key={_i11}><Hv as="div" hover="background:#141b25; color:#e8eef6" '
+                'title={o.title} onClick={o.go} style={S(o.style)}>{o.t}</Hv></React.Fragment>))}</div></div>')
+        src = src.replace(needle, repl, 1)
+        applied.append("mmu recover menu (1x)")
+    else:
+        failed.append(f"mmu recover menu: found {n} occurrence(s) of the actions row, expected 1")
+else:
+    applied.append("mmu recover menu (already patched)")
+
+# ---- spool card: per-gate CHECK GATE ----
+# Mirrors the edit control on the opposite corner. Both swallow the click: the card itself selects the
+# gate, and checking a gate you did not mean to select is worse than useless.
+if "sp.checkStyle" not in src:
+    needle = ('{sp.edit ? <Hv as="div" onClick={sp.edit} title={sp.editTitle} style={sp.editStyle} '
+              'hover="background:#1d2734; color:#e8eef6; border-color:#4a5666">{"\u270e"}</Hv> : null}')
+    n = src.count(needle)
+    if n == 1:
+        src = src.replace(needle, needle + ('{sp.check ? <Hv as="div" onClick={sp.check} title={sp.checkTitle} '
+              'style={sp.checkStyle} hover="background:#1d2734; color:#3ddcc4; border-color:#4a5666">'
+              '{"\u2713"}</Hv> : null}'), 1)
+        applied.append("spool card check gate (1x)")
+    else:
+        failed.append(f"spool card check gate: found {n} occurrence(s) of the edit control, expected 1")
+else:
+    applied.append("spool card check gate (already patched)")
+
 # ---- chain node values: expose the hover title ----
 # The ENCODER node shows SIGNED movement (see trackEncoder in adapters/mmu.js); the lifetime odometer it
 # is derived from stays reachable as a tooltip rather than being lost. Two occurrences: preNodes and

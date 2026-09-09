@@ -185,10 +185,30 @@ export function makeMmuActions({ api, store, log } = {}) {
     say(cmd + " — insert filament into the gate now");
     return run(cmd, "Gate preloaded");
   }
-  async function mmuRecover() {
+  /** MMU_HOME — homes the selector. Refused mid-print: it drives the selector across every gate. */
+  async function mmuHome() {
     if (blocked()) return false;
-    say("MMU_RECOVER — resyncing Happy Hare state from sensors", "warn");
-    return run("MMU_RECOVER", "MMU state recovered");
+    if (printingNow()) { say("Refused — MMU_HOME moves the selector while printing (pause first)", "warn"); return false; }
+    if (busy("MMU_HOME")) return false;
+    say("MMU_HOME — homing the selector", "warn");
+    return run("MMU_HOME", "Selector homed");
+  }
+
+  /**
+   * MMU_RECOVER — resync Happy Hare's idea of state from the hardware.
+   *
+   * `loaded` maps to HH's LOADED=0|1 (verified against cmd_MMU_RECOVER: get_int('LOADED', -1, minval=0,
+   * maxval=1)). Omitting it lets HH work the position out from its sensors; passing it ASSERTS the answer,
+   * which is what you want when the sensors cannot tell (no toolhead sensor on this machine) and you can
+   * see for yourself whether filament is at the nozzle.
+   */
+  async function mmuRecover(loaded) {
+    if (blocked()) return false;
+    const l = loaded === 1 || loaded === true ? 1 : loaded === 0 || loaded === false ? 0 : null;
+    const cmd = "MMU_RECOVER" + (l === null ? "" : " LOADED=" + l);
+    say(cmd + " — resyncing Happy Hare state"
+      + (l === null ? " from sensors" : l ? ", asserting filament IS loaded" : ", asserting filament is NOT loaded"), "warn");
+    return run(cmd, "MMU state recovered");
   }
   async function mmuReset() {
     if (blocked()) return false;
@@ -321,6 +341,7 @@ export function makeMmuActions({ api, store, log } = {}) {
       case "EJECT": return mmuEject();
       case "CHECK": case "CHECK_GATE": return checkGate();
       case "RECOVER": case "MMU_RECOVER": return mmuRecover();
+      case "HOME": case "MMU_HOME": return mmuHome();
       case "UNLOAD": case "MMU_UNLOAD": return mmuUnload();
       case "LOAD": case "MMU_LOAD": return mmuLoad();
       case "RESET": case "MMU_RESET": return mmuReset();
@@ -491,7 +512,7 @@ export function makeMmuActions({ api, store, log } = {}) {
 
   return {
     selectTool, selectGate, selectBypass, checkGate, checkGates,
-    mmuLoad, mmuUnload, mmuEject, mmuPreload, mmuRecover, mmuReset, cutFilament, formTip,
+    mmuLoad, mmuUnload, mmuEject, mmuPreload, mmuRecover, mmuReset, cutFilament, formTip, mmuHome,
     servoPos, mmuStats, mmuSettings, editGateMap, setEndless,
     assignSpool, setGateLocal, refreshSpoolman, gateAttrs, tempFloor,
     mmuAction, mmuMenuAction,
