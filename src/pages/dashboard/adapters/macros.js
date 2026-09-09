@@ -250,7 +250,19 @@ export function macrosVals(ctx) {
     log("Macro actions not wired — " + name, "warn");
   };
 
+  // ---- collapse ------------------------------------------------------------------------------------
+  // MACROS is collapsed by default and sorts BELOW MACHINE LIMITS. The move is a CSS `order:1` on the
+  // section in its flex-column parent, not a relocation of 3 KB of generated markup — far less likely to
+  // reparent half the layout by accident. The header stays visible and keeps its count, so the panel
+  // still says how many macros exist while shut.
+  const macrosOpen = !!ui.macrosOpen;
+
   return {
+    macrosOpen,
+    macrosChevron: macrosOpen ? "\u25be" : "\u25b8",
+    macrosToggle: () => set(s2 => ({ macrosOpen: !(s2 && s2.macrosOpen) })),
+    macrosChevronStyle: "font-family:'JetBrains Mono',monospace; font-size:9px; color:#4d5a6b; cursor:pointer; padding:0 3px",
+    macrosBodyStyle: macrosOpen ? "" : "display:none",
     macros: visible.map(k => {
       const m = macroMeta(st, ui, k);
       return { g: m.g, t: m.t, run: () => run(k) };

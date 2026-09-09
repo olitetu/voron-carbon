@@ -433,6 +433,61 @@ if "V.motorsOff" not in src:
 else:
     applied.append("machine limits motors off (already patched)")
 
+# ---- MACROS: collapsed by default, and sorted below MACHINE LIMITS ----
+# Two transformations on each MACROS <section> (there are two: wide layout + narrow-mode variant, byte
+# identical):
+#   1. `order:1` on the section. Its parent is display:flex/flex-direction:column, so a single CSS
+#      property sorts it last — below MACHINE LIMITS — WITHOUT relocating 3 KB of generated markup.
+#      Moving the span by string surgery risks silently reparenting half the layout; this does not.
+#   2. wrap everything after the header in V.macrosBodyStyle and put a chevron in the header, so the
+#      panel starts shut. The header keeps its count, so it still says how many macros exist while shut.
+#
+# The section's opening tag is byte-identical across all 14 panels, so MACROS is located by CONTENT
+# (a balanced scan for the section containing the MACROS label), never by its style string.
+if "V.macrosBodyStyle" not in src:
+    def _section_spans(text):
+        out = []
+        idx = 0
+        while True:
+            i = text.find('<section', idx)
+            if i < 0: break
+            depth, j = 0, i
+            while j < len(text):
+                if text.startswith('<section', j): depth += 1; j += 8
+                elif text.startswith('</section>', j):
+                    depth -= 1; j += 10
+                    if depth == 0: break
+                else: j += 1
+            out.append((i, j))
+            idx = i + 1
+        return out
+
+    HDR_END = ('<Hv as="span" hover="color:#e8eef6" onClick={V.toggleMacroPicker} '
+               'style={S(V.macroDotsStyle)}>{"\\u22ee"}</Hv></div>')
+    LABEL = '<span style={S("font-family:\'JetBrains Mono\',monospace; font-size:10px; letter-spacing:.16em; color:#8b98aa")}>{"MACROS"}</span>'
+    OPEN_TAG = '<section style={S("background:#0b0f15; border:1px solid #161d27; border-radius:6px; box-shadow:0 10px 26px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.02); overflow:hidden")}>'
+    CHEVRON = ('<Hv as="span" hover="color:#e8eef6" onClick={V.macrosToggle} '
+               'style={S(V.macrosChevronStyle)}>{V.macrosChevron}</Hv>')
+
+    targets = [(a, b) for (a, b) in _section_spans(src) if '{"MACROS"}' in src[a:b]]
+    if len(targets) == 2 and all(src[a:b].count(HDR_END) == 1 and src[a:b].count(LABEL) == 1
+                                and src[a:b].startswith(OPEN_TAG) for a, b in targets):
+        # rebuild back-to-front so earlier offsets stay valid
+        for a, b in reversed(targets):
+            sec = src[a:b]
+            sec = sec.replace(OPEN_TAG, OPEN_TAG.replace('overflow:hidden")}>', 'overflow:hidden; order:1")}>'), 1)
+            sec = sec.replace(LABEL, CHEVRON + LABEL, 1)
+            sec = sec.replace(HDR_END, HDR_END + '<div style={S(V.macrosBodyStyle)}>', 1)
+            assert sec.endswith('</section>')
+            sec = sec[:-len('</section>')] + '</div></section>'
+            src = src[:a] + sec + src[b:]
+        applied.append("macros collapse + order (2x)")
+    else:
+        failed.append("macros collapse: expected 2 MACROS sections each with one header/label and the "
+                      f"standard opening tag, found {len(targets)}")
+else:
+    applied.append("macros collapse + order (already patched)")
+
 # ---- chain node values: expose the hover title ----
 # The ENCODER node shows SIGNED movement (see trackEncoder in adapters/mmu.js); the lifetime odometer it
 # is derived from stays reachable as a tooltip rather than being lost. Two occurrences: preNodes and

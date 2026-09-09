@@ -45,6 +45,9 @@ export class DashboardLogic extends React.Component {
     ledPicker: null, mmuMenuOpen: false, macroPickerOpen: false, servoMenuOpen: false,
     soakMenuOpen: false, macroPickerFor: null, iconPickFor: null, mapOpen: null, recoverMenuOpen: false,
     excludeOpen: false, consoleExpanded: false,
+    // MACROS starts COLLAPSED: it is a long grid of buttons and the owner wants it out of the way,
+    // below MACHINE LIMITS. Persisted per browser via the same usePersisted-free pattern as the rest.
+    macrosOpen: false,
     // Gate editor: the gate number whose "change filament" dialog is open, or null. Lives here rather
     // than in the MMU adapter because the dialog is a sibling of Template, not part of the panel markup.
     gateEditor: null,
