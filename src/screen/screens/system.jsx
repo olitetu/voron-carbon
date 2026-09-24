@@ -406,7 +406,7 @@ function VersionsPanel({ st, klippy: klippyNow, upd, go }) {
 }
 
 // ---------------------------------------------------------------------------
-export default function System({ st, go, api, act }) {
+export default function System({ st, go, api, act, screenOff }) {
   const [confirm, setConfirm] = React.useState(null);
   // The confirm is open for seconds; the guard must be re-read at CONFIRM, not at the tap that opened it.
   const stRef = React.useRef(st);
@@ -448,6 +448,8 @@ export default function System({ st, go, api, act }) {
   const model = ((st.systemInfo || {}).cpu_info || {}).model || "";
   const pi5 = /Raspberry Pi 5/i.test(model);
   const hostWord = /Raspberry Pi/i.test(model) ? "the Raspberry Pi" : "the host";
+
+  const canBlank = !!(st.helper && st.helperCanBlank && screenOff);
 
   const ROW = [
     {
@@ -492,9 +494,12 @@ export default function System({ st, go, api, act }) {
         <VersionsPanel st={st} klippy={klippy} upd={upd} go={go} />
       </div>
 
-      {/* The danger row. Every one confirms; every one is refused while a print is printing or paused. */}
-      <div style={S(`flex:none; display:grid; grid-template-columns:${L.fab + L.fabInset}px repeat(4,1fr); gap:8px`)}>
+      {/* The danger row. Every one confirms; every one is refused while a print is printing or paused.
+          SCREEN OFF leads it but is none of those: harmless, never refused (a long print is when it is wanted),
+          and shown only when the host helper can switch this panel off (DPMS; HDMI has nothing else). */}
+      <div style={S(`flex:none; display:grid; grid-template-columns:${L.fab + L.fabInset}px ${canBlank ? "repeat(5,1fr)" : "repeat(4,1fr)"}; gap:8px`)}>
         <span />
+        {canBlank ? <PanelBtn label="SCREEN OFF" sub="TAP TO WAKE" h={TAP.primary} onTap={screenOff} /> : null}
         {ROW.map(a => {
           const why = powerWhy(st, a.guard, klippy);
           return (

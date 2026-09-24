@@ -67,6 +67,8 @@
   .lbl{font-size:11px;letter-spacing:.2em;color:var(--faint);flex:none}
   a{color:var(--accent);text-decoration:none}
   footer{flex:none;padding:0 14px 10px;font-size:11px;color:var(--ghost);letter-spacing:.06em}
+  #why{flex:none;display:none;padding:8px 14px;font-size:12px;line-height:1.45;color:var(--warn);
+    background:var(--warnbg);border-bottom:1px solid var(--warnline);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 </style>
 </head>
 <body>
@@ -76,6 +78,7 @@
   <span class="s" id="state">connecting&hellip;</span>
   <span class="r" id="temps"></span>
 </header>
+<div id="why"></div>
 
 <main>
   <div class="col">
@@ -244,6 +247,32 @@
   };
 
   connect();
+
+  // Sent here by screen.html's boot watchdog or the app's root error boundary: say why, and go back to the full
+  // UI by itself as soon as a different screen.js is deployed (its ETag or Last-Modified changes). An unchanged
+  // bundle never bounces back, so a crash cannot turn into a reload loop.
+  var q = /[?&]from=screen\b/.test(location.search);
+  if (q) {
+    var m = /[?&]why=([^&]*)/.exec(location.search);
+    var why = document.getElementById("why");
+    why.textContent = "The full UI did not start" + (m ? " (" + decodeURIComponent(m[1].replace(/\+/g, " ")) + ")" : "") +
+      ". This page returns to it by itself when a new build is deployed.";
+    why.style.display = "block";
+    var seen = null;
+    var tag = function () {
+      return fetch("screen.js", { method: "HEAD", cache: "no-store" }).then(function (r) {
+        return r.ok ? (r.headers.get("etag") || r.headers.get("last-modified") || "") : null;
+      }).catch(function () { return null; });
+    };
+    setInterval(function () {
+      tag().then(function (t) {
+        if (!t) return;
+        if (seen === null) { seen = t; return; }
+        if (t !== seen) location.replace("./screen.html");
+      });
+    }, 30000);
+    tag().then(function (t) { if (t) seen = t; });
+  }
 })();
 </script>
 </body>

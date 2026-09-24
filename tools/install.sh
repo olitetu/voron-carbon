@@ -73,6 +73,23 @@ echo
 # ── preflight ───────────────────────────────────────────────────────────────────────────────────
 echo "Checking the host…"
 
+# Where this script runs from. It calls sudo and writes an nginx site, so it must not run from
+# anywhere Moonraker's file API can write: every trusted LAN client can edit ~/printer_data.
+REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+PD="$(cd "$HOME/printer_data" 2>/dev/null && pwd -P || true)"
+if [ -n "$PD" ]; then
+  case "$REAL/" in
+    "$PD"/*) fail "Refusing to run from $REAL: Moonraker lets every trusted LAN client write there. Run it from your git checkout:  cd ~/voron-carbon && bash tools/install.sh" ;;
+  esac
+fi
+if TOP="$(git -C "$REAL" rev-parse --show-toplevel 2>/dev/null)"; then
+  DIRTY="$(git --no-optional-locks -C "$TOP" status --porcelain -- tools/install.sh 2>/dev/null || echo '?? git status failed')"
+  [ -z "$DIRTY" ] || fail "tools/install.sh has local changes. Review them (git -C $TOP diff -- tools/install.sh), commit or discard them, and re-run."
+  say "installer: $TOP at $(git -C "$TOP" rev-parse --short HEAD 2>/dev/null)"
+else
+  say "installer: $REAL (not a git checkout)"
+fi
+
 command -v nginx >/dev/null 2>&1 || fail "nginx is not installed. Install it first (apt install nginx), then re-run."
 say "nginx: $(nginx -v 2>&1 | sed 's|nginx version: ||')"
 
@@ -102,10 +119,24 @@ else
   say "Moonraker: NOT verified (curl missing) — assuming 127.0.0.1:$MOONRAKER_PORT"
 fi
 
-# Auto-detect where Carbon's files are, if not told.
+# A re-run keeps the root the live site already serves. The panel kiosk and Moonraker's
+# update_manager (path:) both depend on it, and the candidates below never include a relocated
+# root, so a bare re-run used to stop, or quietly re-point the whole site at another directory.
+EXISTING_ROOT=""
+if [ -f "$SITE_FILE" ]; then
+  EXISTING_ROOT="$(awk '$1=="root"{gsub(/;/,"",$2);print $2;exit}' "$SITE_FILE" 2>/dev/null || true)"
+fi
+if [ -z "$ROOT" ] && [ -n "$EXISTING_ROOT" ]; then
+  ROOT="$EXISTING_ROOT"
+  say "Keeping the existing site's root: $ROOT"
+fi
+
+# Auto-detect where Carbon's files are, if not told. <checkout>/dist comes before the checkout
+# itself: the build writes index.html there, never to the repo root.
 if [ -z "$ROOT" ]; then
   for cand in \
       "$HOME/printer_data/carbon" \
+      "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/dist" \
       "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" \
       "$HOME/carbon" ; do
     if [ -f "$cand/index.html" ]; then ROOT="$cand"; break; fi
@@ -117,6 +148,14 @@ ROOT="$(cd "$ROOT" && pwd)"
 [ -f "$ROOT/index.html" ] || fail "$ROOT/index.html does not exist — is --root right?"
 say "Carbon files: $ROOT"
 [ -f "$ROOT/app.js" ] || say "WARNING: $ROOT/app.js is missing — the app will not load."
+if [ -n "$EXISTING_ROOT" ] && [ "$EXISTING_ROOT" != "$ROOT" ]; then
+  echo
+  echo "  ROOT CHANGE   $EXISTING_ROOT  ->  $ROOT"
+  echo "  The live site serves the first; this run would serve the second. The panel kiosk and"
+  echo "  Moonraker's update_manager (path:) follow whatever nginx serves. If that is not what you"
+  echo "  meant, answer N below and re-run without --root: a re-run keeps the existing root."
+  echo
+fi
 
 # Port must be free. A listener here is almost always a previous install or another UI.
 if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q ":$PORT[[:space:]]"; then
@@ -245,6 +284,10 @@ server {
     location = /safe.html   { add_header Cache-Control "no-store, no-cache, must-revalidate"; }
     # Moonraker's update_manager reads this to decide whether an update exists.
     location = /release_info.json { add_header Cache-Control "no-store"; }
+    # screen.html loads fonts/fonts.css, whose NAME never changes, so it must not fall under the
+    # one-year immutable rule below or a kiosk keeps a stale stylesheet after an update. no-cache
+    # revalidates it (a cheap 304 on loopback). An exact = match always beats the ^~ prefix.
+    location = /fonts/fonts.css { add_header Cache-Control "no-cache"; }
     location ^~ /fonts/ {
         add_header Cache-Control "public, max-age=31536000, immutable";
         access_log off;
@@ -266,7 +309,12 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
-        proxy_read_timeout 210s;     # above a wifi connect's worst case with rollback: CONNECT_CEILING, 182 s
+        # The address nginx accepted the connection on: 127.0.0.1 or ::1 only for a client
+        # on this machine that dialled loopback. The realip module cannot rewrite it, and
+        # this replaces any header of that name the client sent. The helper refuses every
+        # request without it (tools/helper/nginx-helper.conf is the reference copy).
+        proxy_set_header X-Carbon-Local-Addr \$server_addr;
+        proxy_read_timeout 240s;     # above a wifi connect's worst case with cleanup and rollback: CONNECT_CEILING, 217 s
         proxy_buffering off;
     }
 
@@ -313,7 +361,13 @@ EOF
 echo
 echo "Plan:"
 say "write   $SITE_FILE"
-[ "$LAYOUT" = sites ] && say "symlink $LINK_FILE  (only after nginx -t passes)"
+if [ "$LAYOUT" = sites ]; then
+  if [ -L "$LINK_FILE" ]; then
+    say "keep    $LINK_FILE  (already enabled: the live file is replaced, and restored if nginx -t fails)"
+  else
+    say "symlink $LINK_FILE  (only after nginx -t passes)"
+  fi
+fi
 say "reload  nginx (never restart — existing connections are not dropped)"
 say "serve   http://$(hostname):$PORT/  from $ROOT"
 echo
@@ -336,41 +390,67 @@ fi
 echo
 echo "Installing…"
 
+BACKUP=""                                   # set -u: stays empty on a first install
 if [ -e "$SITE_FILE" ]; then
   BACKUP="$SITE_FILE.bak-$(date +%Y%m%d%H%M%S)"
-  sudo cp "$SITE_FILE" "$BACKUP"
+  sudo cp -p "$SITE_FILE" "$BACKUP"
   say "backed up existing site → $BACKUP"
 fi
+
+# Undo this run ON DISK. The running nginx is never touched here: nothing reloads it before the end,
+# so putting the file back leaves both the live config and the next boot as they were. On a re-run
+# the site is already enabled, so deleting the file (as this used to) left a dangling sites-enabled
+# link, which fails every later `nginx -t`: no nginx at the next boot, and no Mainsail either.
+restore_site() {
+  if [ -n "$BACKUP" ]; then
+    sudo cp -p "$BACKUP" "$SITE_FILE"
+    say "restored $SITE_FILE from $BACKUP (enabled link left as it was)"
+  else
+    sudo rm -f "$SITE_FILE"
+    if [ -n "$LINK_FILE" ]; then sudo rm -f "$LINK_FILE"; fi   # no previous file => any link would dangle
+  fi
+  # belt and braces: never leave a dangling enabled link
+  if [ -n "$LINK_FILE" ] && [ -L "$LINK_FILE" ] && [ ! -e "$LINK_FILE" ]; then sudo rm -f "$LINK_FILE"; fi
+  if sudo nginx -t >/dev/null 2>&1; then
+    say "on-disk config is valid again. nginx was NOT reloaded and still serves the previous config."
+  else
+    say "nginx -t STILL FAILS after restoring. The fault is outside $SITE_FILE."
+    say "Do NOT reboot or 'systemctl restart nginx' until 'sudo nginx -t' passes, or nginx (and Mainsail) will not start."
+  fi
+}
+# Also covers dying between the write and the test: a failed command, ^C, or a dropped SSH session.
+trap 'restore_site; exit 1' ERR INT TERM HUP
 
 printf '%s\n' "$CONF" | sudo tee "$SITE_FILE" >/dev/null
 sudo chmod 0644 "$SITE_FILE"
 say "wrote $SITE_FILE"
 
-# Validate BEFORE enabling. A broken config that is already symlinked takes down every other site
-# on the next reload — including the UI the operator is reading this in.
-if [ "$LAYOUT" = sites ]; then
-  if ! sudo nginx -t 2>/tmp/carbon-nginx-test.log; then
-    say "nginx -t FAILED with the new site written but NOT enabled:"
-    sed 's/^/       /' /tmp/carbon-nginx-test.log >&2
-    sudo rm -f "$SITE_FILE"
-    fail "Removed $SITE_FILE. Nothing was enabled; your existing sites are untouched."
-  fi
-  say "nginx -t passed (site written, not yet enabled)"
-  sudo ln -sfn "$SITE_FILE" "$LINK_FILE"
-  say "enabled $LINK_FILE"
-fi
-
+# Validate before enabling a new site, and before reloading an existing one. A broken config that is
+# enabled takes down every other site on the next reload — including the UI the operator is reading
+# this in. On a re-run the site is ALREADY enabled, which is why a failure restores the backup.
 if ! sudo nginx -t 2>/tmp/carbon-nginx-test.log; then
-  say "nginx -t FAILED after enabling — backing out:"
+  trap - ERR INT TERM HUP
+  say "nginx -t FAILED with the new site in place:"
   sed 's/^/       /' /tmp/carbon-nginx-test.log >&2
-  [ -n "$LINK_FILE" ] && sudo rm -f "$LINK_FILE"
-  sudo rm -f "$SITE_FILE"
-  sudo nginx -t >/dev/null 2>&1 && say "nginx config is valid again"
-  fail "Backed out completely. Nothing is left behind."
+  restore_site
+  fail "Rolled back to the previous on-disk state."
 fi
 say "nginx -t passed"
+if [ "$LAYOUT" = sites ] && [ ! -L "$LINK_FILE" ]; then
+  sudo ln -sfn "$SITE_FILE" "$LINK_FILE"
+  say "enabled $LINK_FILE"
+  if ! sudo nginx -t 2>/tmp/carbon-nginx-test.log; then
+    trap - ERR INT TERM HUP
+    say "nginx -t FAILED after enabling:"
+    sed 's/^/       /' /tmp/carbon-nginx-test.log >&2
+    restore_site
+    fail "Rolled back to the previous on-disk state."
+  fi
+  say "nginx -t passed"
+fi
 
 sudo systemctl reload nginx
+trap - ERR INT TERM HUP
 say "nginx reloaded"
 
 # ── acceptance ──────────────────────────────────────────────────────────────────────────────────
@@ -384,6 +464,18 @@ for probe in "/:200" "/app.js:200" "/server/info:200" "/api/version:200"; do
   got="$(code "$H$path")"
   [ "$got" = "$want" ] && printf '  ok    %-16s %s\n' "$path" "$got" \
                        || { printf '  FAIL  %-16s %s (expected %s)\n' "$path" "$got" "$want"; ok=0; }
+done
+# The panel's own files. Only a note for a desktop-only install, where nginx is fine without them;
+# a FAIL once the kiosk is installed, because a 404 here is a black panel until it falls back.
+for path in /screen.html /screen.js /screen.css /safe.html; do
+  got="$(code "$H$path")"
+  if [ "$got" = 200 ]; then
+    printf '  ok    %-16s %s\n' "$path" "$got"
+  elif [ -e /etc/systemd/system/carbon-kiosk.service ]; then
+    printf '  FAIL  %-16s %s (expected 200: the panel kiosk loads it)\n' "$path" "$got"; ok=0
+  else
+    printf '  note  %-16s %s (only the panel kiosk needs it)\n' "$path" "$got"
+  fi
 done
 if [ "$WEBCAM_PORT" != "0" ]; then
   got="$(code "$H/webcam/?action=snapshot")"
@@ -412,6 +504,11 @@ if [ "$ok" = 1 ]; then
 else
   echo "Installed, but some checks failed — see above."
   say "Logs: /var/log/nginx/${SITE_NAME}-error.log"
-  say "Remove with: sudo rm -f $LINK_FILE $SITE_FILE && sudo nginx -t && sudo systemctl reload nginx"
+  if [ -n "$BACKUP" ]; then
+    # A re-run: removing the site would take the working desktop UI (and the panel) down with it.
+    say "Put the previous site back with: sudo cp -p $BACKUP $SITE_FILE && sudo nginx -t && sudo systemctl reload nginx"
+  else
+    say "Remove with: sudo rm -f $LINK_FILE $SITE_FILE && sudo nginx -t && sudo systemctl reload nginx"
+  fi
   exit 1
 fi

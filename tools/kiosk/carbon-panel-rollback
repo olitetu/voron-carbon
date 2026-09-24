@@ -7,14 +7,26 @@
 # inside the enclosure: after cutover this panel is the only local UI, and the
 # moment you need this command is the moment you cannot look it up on the printer.
 set -u
+# Without root every systemctl call below fails quietly (errors go to /dev/null) and the
+# panel stays dark while this looks finished.
+[ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
+# A dropped SSH session (on the panel's own wifi) or a stray ^C must not stop this
+# halfway. Ignored signals are inherited, so systemctl ignores them too.
+trap '' HUP INT
 echo "Restoring KlipperScreen on the panel..."
-systemctl stop carbon-kiosk.service        2>/dev/null
-systemctl disable carbon-kiosk.service     2>/dev/null
+# Order matters: KlipperScreen is ENABLED before carbon-kiosk is disabled, so there is
+# never a moment where neither is enabled (a dark panel on every boot). Both enabled
+# is safe: at boot Conflicts= lets carbon-kiosk win, and it falls back by itself.
 systemctl enable  KlipperScreen.service    2>/dev/null
+systemctl stop    carbon-kiosk.service     2>/dev/null
 systemctl start   KlipperScreen.service
+systemctl disable carbon-kiosk.service     2>/dev/null
+# The stop leaves carbon-kiosk "failed" and part of its start-limit budget used;
+# clear both so the way back below is never refused.
+systemctl reset-failed carbon-kiosk.service 2>/dev/null
 sleep 2
 printf '  KlipperScreen : %s\n' "$(systemctl is-active KlipperScreen.service)"
 printf '  carbon-kiosk  : %s\n' "$(systemctl is-active carbon-kiosk.service)"
 echo
 echo "Carbon itself is untouched and still served on its port."
-echo "To go back to it:  sudo systemctl disable --now KlipperScreen && sudo systemctl enable --now carbon-kiosk"
+echo "To go back to it:  sudo systemctl reset-failed carbon-kiosk; sudo systemctl enable --now carbon-kiosk && sudo systemctl disable KlipperScreen"

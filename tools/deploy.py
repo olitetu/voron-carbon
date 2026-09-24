@@ -76,15 +76,9 @@ for p in sorted(root.rglob("*")):
     else:
         failed += 1
 
-# install.sh has to BE on the printer to be run there, and it is not part of dist/ — shipping it
-# alongside keeps the copy you SSH to in sync with this checkout.
-for name in ("install.sh",):
-    f = here / name
-    if f.exists():
-        if put(f, f"{remote_dir}/tools", f"tools/{name}"):
-            sent += 1
-        else:
-            failed += 1
+# install.sh is deliberately NOT shipped. It runs sudo, and anything under Moonraker's config
+# root can be rewritten by every trusted LAN client, so install.sh refuses to run from there.
+# Run it from the git checkout on the printer (cd ~/voron-carbon && git pull && bash tools/install.sh).
 
 print(f"\nuploaded {sent} file(s) to {base}/server/files/config/{remote_dir}/"
       + (f" — {failed} FAILED" if failed else ""))

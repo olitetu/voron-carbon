@@ -86,10 +86,11 @@ cd "$HOME/voron-carbon"
 git pull --ff-only
 npm ci
 npm run build
-bash tools/install.sh --root "$PWD/dist"
+bash tools/install.sh
 ```
 
-The installer validates the new nginx configuration before reloading nginx. Carbon is static, so no Klipper or
+Leave `--root` off on an update: a re-run keeps the root the live site already serves, which is what the panel
+kiosk and Moonraker's update_manager depend on. The installer validates the new nginx configuration before reloading nginx. Carbon is static, so no Klipper or
 Moonraker restart is required.
 
 ## Layout

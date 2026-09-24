@@ -1,47 +1,110 @@
 # Carbon Screen kiosk — the printer's physical touchscreen.
 #
 # Generated/installed by tools/kiosk/install_kiosk.sh, which fills in USER and TTY
-# by READING the existing KlipperScreen unit rather than guessing them.
+# by READING the existing KlipperScreen unit rather than guessing them. The rest is
+# copied from that unit wherever possible, because it is the only proof of what
+# works on this hardware; every difference says why below.
+#
+# No directive line here contains a dollar sign or a percent sign, on purpose: systemd
+# rewrites both before any shell sees them. Shell logic lives in the scripts it runs.
 [Unit]
 Description=Carbon Screen kiosk (Chromium on the printer panel)
-# Both want the same panel and the same tty. Declaring it means systemd stops one
-# to start the other instead of leaving two X servers fighting over the console.
+# Both want the same panel and the same tty. Conflicts= makes systemd stop one to
+# start the other; After= is what ORDERS that. With any ordering between two units,
+# systemd runs the stop job before the start job, whichever way round
+# (systemd.unit(5), Before=/After=), so KlipperScreen's Xorg has exited and VT7 is
+# freed before our xinit starts, and the reverse. Conflicts= alone runs both jobs
+# at once, and the two xinits race for :0.
 Conflicts=KlipperScreen.service
-After=network-online.target nginx.service moonraker.service
+After=network-online.target nginx.service moonraker.service KlipperScreen.service
 Wants=network-online.target
+# From the working KlipperScreen.service: start once logins are permitted and
+# plymouth is leaving the console; talk to logind over D-Bus; skip on a machine
+# with no virtual consoles (a skipped unit is not a failed one).
+After=systemd-user-sessions.service plymouth-quit-wait.service
+Wants=dbus.socket systemd-logind.service
+After=dbus.socket systemd-logind.service
+ConditionPathExists=/dev/tty0
+
 # If the kiosk cannot stay up, put KlipperScreen back rather than leaving the
 # printer with no local UI at all. This is the automatic half of the rollback.
+#
+# With Restart=always the START LIMIT is the trigger: "A service unit using
+# Restart= enters the failed state only after the start limits are reached"
+# (systemd.unit(5), OnFailure=). So:
+#   - These two live in [Unit]. systemd 252 does not know StartLimitIntervalSec= in
+#     [Service]; it ignored it, the window fell back to the 10 s default, which
+#     RestartSec=5 can never fill, and the fallback could never fire.
+#   - The 5th start inside the window is refused -> start-limit-hit -> OnFailure=.
+#     The window must hold burst+1 starts of the SLOWEST failing cycle:
+#     4 x (TimeoutStartSec 40 + RestartSec 5) = 180 s < 300 s.
+#       UI dead or 404ing:        KlipperScreen back after ~2.5 min (~3 if curl hangs)
+#       Xorg/Chromium crash loop: ~25 s
+#   - Manual starts count too (the limits "apply to all kinds of starts (including
+#     manual)"): a 5th start/restart inside 5 min also hands the panel over. That
+#     fails safe. Every "come back" runs `systemctl reset-failed carbon-kiosk` first,
+#     or systemd refuses the start ("Start request repeated too quickly").
+# install_kiosk.sh checks systemd really applied 5min / 4 / 40s before the swap.
 OnFailure=carbon-kiosk-fallback.service
+StartLimitIntervalSec=300
+StartLimitBurst=4
 
 [Service]
 Type=simple
 User=__USER__
-PAMName=login
+# No PAMName=. The working KlipperScreen unit has none, and with it pam_systemd
+# moves Xorg and Chromium into a logind session-N.scope, out of this unit's cgroup,
+# where the Memory*/OOMPolicy lines below cannot reach them. X starts without a
+# session the way KlipperScreen's does: Xorg.wrap (xserver-xorg-legacy) with
+# /etc/X11/Xwrapper.config allowed_users=anybody, needs_root_rights=yes, written
+# by KlipperScreen's installer.
 TTYPath=__TTY__
 TTYReset=yes
 TTYVHangup=yes
+TTYVTDisallocate=yes
 StandardInput=tty
 StandardOutput=journal
 StandardError=journal
 EnvironmentFile=-/etc/default/carbon-kiosk
-Environment=XAUTHORITY=/home/__USER__/.Xauthority
+# No logind session means no /run/user/UID. Give Chromium a runtime (and temp) dir
+# that systemd owns instead: created 0700 for __USER__ before every start, removed
+# at stop, RAM-backed, and outside /dev/shm, which logind's RemoveIPC= sweeps of
+# this user's files whenever their last SSH session ends (logind.conf(5)).
+RuntimeDirectory=carbon-kiosk
+RuntimeDirectoryMode=0700
+Environment=XDG_RUNTIME_DIR=/run/carbon-kiosk
 
 # Do not paint a kiosk at a UI that is not up yet: a Chromium error page is sticky
-# and nobody is standing there to reload it. Poll, then start.
-ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do curl -fsS -o /dev/null "${KIOSK_URL:-http://127.0.0.1:8767/screen.html}" && exit 0; sleep 2; done; echo "carbon-kiosk: UI never came up"; exit 1'
-ExecStart=/usr/bin/xinit /home/__USER__/carbon-kiosk/carbon-kiosk-session.sh -- :0 __TTY_VT__ -nolisten tcp -noreset
+# and nobody is standing there to reload it. Poll, then start. The poll gives up
+# after ~30 s, inside TimeoutStartSec, so a dead UI costs one short, COUNTED attempt.
+# (The old inline 60 x 2 s poll outlived the 90 s default timeout: every attempt was
+# so long that the start limit could never be reached.)
+ExecStartPre=/home/__USER__/carbon-kiosk/carbon-kiosk-wait.sh
+TimeoutStartSec=40
+# -nocursor: KlipperScreen hid the pointer itself, and unclutter is not installed on
+# this Pi. With it the X server never draws a pointer at all (Xserver(1)), whatever
+# the page's CSS says. Trade-off: a mouse plugged in for debugging shows none either.
+ExecStart=/usr/bin/xinit /home/__USER__/carbon-kiosk/carbon-kiosk-session.sh -- :0 __TTY_VT__ -nolisten tcp -noreset -nocursor
 
 Restart=always
 RestartSec=5
-# Five failures inside two minutes is a real fault, not a blip -> let OnFailure fire.
-StartLimitIntervalSec=120
-StartLimitBurst=5
 
-# Chromium on a 4 GB Pi 5 sharing with klipper/moonraker/crowsnest. MemoryMax is a
-# backstop, not a target; if it trips regularly the page is leaking.
+# Chromium on a 4 GB Pi 5 sharing with klipper/moonraker/crowsnest.
+#
+# OOMScoreAdjust works in every configuration: it is per-process (systemd.exec(5)) and
+# inherited by xinit, Xorg and Chromium, so under memory pressure the kernel kills the
+# panel, which restarts, before it kills Klipper mid-print.
+OOMScoreAdjust=500
+# The next three are INERT unless the memory cgroup controller is on, and Raspberry Pi
+# kernels leave it off without cgroup_enable=memory in cmdline.txt (this Pi's has none).
+# Check:  grep -w memory /sys/fs/cgroup/cgroup.controllers
+# When it is on they bind, because with no PAMName Chromium stays in this cgroup.
+# MemoryMax is a backstop, not a target; if it trips regularly the page is leaking.
+# OOMPolicy=stop (systemd's default) turns an OOM-killed renderer, which would otherwise
+# sit there as a sad tab, into a clean restart of the whole session.
 MemoryHigh=900M
 MemoryMax=1400M
-OOMPolicy=continue
+OOMPolicy=stop
 
 [Install]
 WantedBy=multi-user.target

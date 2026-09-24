@@ -16,6 +16,8 @@ import { boot } from "../lib/boot.js";
 import { useStore } from "../lib/useStore.js";
 import { Frame, StatusBar, Nav, Toast, Confirm, TITLES } from "./shell.jsx";
 import { fmtClock } from "./vm.js";
+import { S } from "../lib/ui.js";
+import { C, F, mono } from "./tokens.js";
 import Home from "./screens/home.jsx";
 import More, { MORE_TILES } from "./screens/more.jsx";
 import Mmu from "./screens/mmu.jsx";
@@ -93,8 +95,27 @@ class ScreenBoundary extends React.Component {
   }
 }
 
+// Around the whole app. ScreenBoundary keeps a crash inside one screen; anything above it (the shell, the status
+// bar, App itself) would unmount the tree and leave the panel black. Hand over to safe.html instead.
+class RootBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error) {
+    const why = `crashed: ${(error && error.message) || error}`.slice(0, 200);
+    setTimeout(() => location.replace("safe.html?from=screen&why=" + encodeURIComponent(why)), 1500);
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return <div style={{ position: "fixed", inset: 0, background: "#06080b", color: "#f0b429", display: "flex",
+      alignItems: "center", justifyContent: "center", font: "14px 'JetBrains Mono', monospace", letterSpacing: ".16em" }}>
+      CARBON SCREEN STOPPED · OPENING SAFE MODE…</div>;
+  }
+}
+
 function App() {
   const st = useStore(store);
+  // The boot watchdog in screen.html stands down once the first frame is on the panel.
+  React.useEffect(() => { window.__carbonScreenUp = true; }, []);
   const [screen, setScreen] = React.useState("home");
   const [navOpen, setNavOpen] = React.useState(false);
   const [toast, setToast] = React.useState(null);
@@ -155,6 +176,32 @@ function App() {
     return ok;
   }), []);
   React.useEffect(() => { probeHelper(); }, [probeHelper]);
+
+  // SCREEN OFF (SYSTEM screen): the helper's `xset dpms force off`. X wakes the panel on any touch by itself,
+  // and that touch would also reach the page, so a black overlay goes up FIRST and swallows the waking tap.
+  // It stays until 400 ms after the finger lifts (ConfirmBox's arm delay), so no part of that tap, pointerup,
+  // the synthesised mouse events or the click, can land on STOP or anything else under it.
+  const [blanked, setBlanked] = React.useState(false);
+  const wakeTimer = React.useRef(null);
+  const screenOff = React.useCallback(async () => {
+    setBlanked(true);
+    try { await helper.blank(true); }
+    catch (e) { setBlanked(false); log(`SCREEN OFF failed: ${(e && e.message) || e}`, "err"); }
+  }, [log]);
+  const wake = React.useCallback(() => {
+    helper.blank(false).catch(() => { /* X has already woken it on the touch */ });
+  }, []);
+  const unblank = React.useCallback(() => {
+    if (wakeTimer.current) clearTimeout(wakeTimer.current);
+    wakeTimer.current = setTimeout(() => { wakeTimer.current = null; setBlanked(false); }, 400);
+  }, []);
+  React.useEffect(() => () => { if (wakeTimer.current) clearTimeout(wakeTimer.current); }, []);
+  // Anything that needs someone at the printer turns the panel back on: an MMU pause, a pause, an error.
+  const printState = (st.raw.print_stats || {}).state || "";
+  const needsEyes = !!hhPause || printState === "paused" || printState === "error" || st.klippy === "shutdown";
+  React.useEffect(() => {
+    if (needsEyes && blanked) { wake(); setBlanked(false); }
+  }, [needsEyes, blanked, wake]);
 
   // clock, 1/s — the only always-running timer. The export ticked its whole tree at 120 ms.
   React.useEffect(() => {
@@ -293,7 +340,7 @@ function App() {
         {Screen
           ? (
             <ScreenBoundary key={screen} title={TITLES[screen] || screen.toUpperCase()} onError={m => log(m, "err")}>
-              <Screen st={st} meta={meta} go={go} say={say} api={api} act={act} askInput={askInput} built={BUILT} probeHelper={probeHelper} />
+              <Screen st={st} meta={meta} go={go} say={say} api={api} act={act} askInput={askInput} built={BUILT} probeHelper={probeHelper} screenOff={screenOff} />
             </ScreenBoundary>
           )
           : <Stub title={TITLES[screen] || screen.toUpperCase()} />}
@@ -302,8 +349,20 @@ function App() {
       <Toast text={toast} />
       <Confirm ask={ask} onNo={() => setAsk(null)} onYes={() => { const a = ask; setAsk(null); if (a && a.run) a.run(); }} />
       {kb ? <Keyboard req={kb.req} onCommit={kbCommit} onCancel={kbCancel} /> : null}
+      {blanked ? (
+        <div role="button" aria-label="Wake the screen"
+          onPointerDown={e => { e.preventDefault(); e.stopPropagation(); wake(); }}
+          onPointerUp={e => { e.stopPropagation(); unblank(); }}
+          onPointerCancel={unblank}
+          onClick={e => e.stopPropagation()}
+          onContextMenu={e => e.preventDefault()}
+          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "#000", touchAction: "none",
+            display: "flex", alignItems: "flex-end", justifyContent: "center", paddingBottom: 28 }}>
+          <span style={S(mono(F.micro, `letter-spacing:.2em; color:${C.faint}`))}>TAP TO WAKE</span>
+        </div>
+      ) : null}
     </Frame>
   );
 }
 
-createRoot(document.getElementById("screen")).render(<App />);
+createRoot(document.getElementById("screen")).render(<RootBoundary><App /></RootBoundary>);

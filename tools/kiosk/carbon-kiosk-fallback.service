@@ -1,10 +1,12 @@
 # Automatic rollback. Fires from carbon-kiosk.service's OnFailure= when the kiosk
 # cannot stay up, so the printer is never left with a dead panel and no local UI.
+#
+# OnFailure= can also fire for a restart whose stop half failed, or when KlipperScreen
+# was started on purpose, so the script decides from live state whether to act (see
+# its header). It runs as root from a root-owned path, never from the user's home.
 [Unit]
 Description=Carbon Screen failed - restoring KlipperScreen on the panel
 
 [Service]
 Type=oneshot
-ExecStart=/bin/systemctl stop carbon-kiosk.service
-ExecStart=/bin/systemctl start KlipperScreen.service
-ExecStart=/bin/sh -c 'echo "carbon-kiosk failed; KlipperScreen restored. Re-enable with: sudo systemctl start carbon-kiosk" | systemd-cat -t carbon-kiosk -p warning'
+ExecStart=/usr/local/lib/carbon-kiosk/fallback.sh

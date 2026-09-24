@@ -11,8 +11,21 @@
 </head>
 <body>
 <div id="screen"></div>
-<script src="vendor/react.production.min.js"></script>
-<script src="vendor/react-dom.production.min.js"></script>
-<script src="screen.js"></script>
+<script>
+// BOOT WATCHDOG. After the cutover this page is the printer's only local UI, and a bundle that fails to load or
+// throws before it mounts would leave a black panel with no emergency stop. If the app has not said it is up
+// within 20 s, go to safe.html: no bundle, no framework, E-STOP and a console. main.jsx sets __carbonScreenUp
+// once React has committed its first frame, and sends a later crash of the whole tree there too.
+(function () {
+  window.__carbonBail = function (why) {
+    if (window.__carbonScreenUp) return;
+    location.replace("safe.html?from=screen&why=" + encodeURIComponent(why));
+  };
+  setTimeout(function () { window.__carbonBail("did not start within 20 s"); }, 20000);
+})();
+</script>
+<script src="vendor/react.production.min.js" onerror="__carbonBail('vendor/react failed to load')"></script>
+<script src="vendor/react-dom.production.min.js" onerror="__carbonBail('vendor/react-dom failed to load')"></script>
+<script src="screen.js" onerror="__carbonBail('screen.js failed to load')"></script>
 </body>
 </html>
