@@ -1,0 +1,40 @@
+/* Carbon Screen — kiosk stylesheet for the printer's 1024x600 touch panel.
+   Separate from base.css (the desktop app's): different keyframe set, and touch
+   hygiene that would be wrong in a browser tab. */
+
+html, body { margin:0; padding:0; background:#04060a; overflow:hidden; height:100%; }
+* { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+body {
+  /* A kiosk has no pointer and nothing to select or long-press. */
+  cursor:none;
+  -webkit-user-select:none; user-select:none;
+  -webkit-touch-callout:none;
+  overscroll-behavior:none;                 /* no pull-to-refresh, no rubber-band */
+  touch-action:manipulation;                /* kills the 300 ms tap delay and pinch-zoom */
+  text-rendering:optimizeLegibility;
+}
+/* The panel is 1024x600 exactly; centre it if the browser window is ever anything else. */
+#screen { display:flex; align-items:center; justify-content:center; width:100vw; height:100vh; }
+
+/* Scrollable lists keep momentum but show no bar — the design has no room for one. */
+::-webkit-scrollbar { width:0; height:0; }
+.scroll { overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+
+/* Keyframes, verbatim from the design export's <helmet>. */
+@keyframes ksPulse { 0%,100%{opacity:1} 50%{opacity:.28} }
+@keyframes ksFlow  { to { background-position:-64px 0 } }
+@keyframes ksRise  { from { opacity:0; transform:translateY(14px) } to { opacity:1; transform:none } }
+@keyframes ksFade  { from { opacity:0 } to { opacity:1 } }
+@keyframes ksToast { 0%{opacity:0;transform:translate(-50%,12px)} 12%,88%{opacity:1;transform:translate(-50%,0)} 100%{opacity:0;transform:translate(-50%,12px)} }
+@keyframes ksSpin  { to { transform:rotate(360deg) } }
+@keyframes ksScan  { 0%{transform:translateY(-100%)} 100%{transform:translateY(900px)} }
+@keyframes ksDash  { to { stroke-dashoffset:-18 } }
+@keyframes ksRoute { to { stroke-dashoffset:-0.034 } }
+@keyframes ksBlade { 0%,58%{transform:translateX(0)} 72%{transform:translateX(-46px)} 86%,100%{transform:translateX(0)} }
+@keyframes ksFlash { 0%,66%{opacity:0} 72%{opacity:1} 84%,100%{opacity:0} }
+
+/* Respect the OS/browser setting; a printer panel left on for days should not animate forever
+   if the owner turns motion off. The layout never depends on an animation. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; }
+}

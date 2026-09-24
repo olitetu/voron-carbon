@@ -16,6 +16,30 @@ const opts = {
   logLevel: "info",
   define: { "process.env.NODE_ENV": '"production"' },
 };
+
+// ---------------------------------------------------------------------------
+// Carbon Screen — the printer's own 1024x600 touch panel, a SECOND entry point.
+//
+// Its own bundle, not a route in app.js: the panel is a kiosk that must boot fast on the Pi and
+// must never pull in the 3D viewer or the CodeMirror editor. It shares every line of src/lib
+// (boot, Moonraker, Store, hh, ui) with the desktop app, so there is one API layer, not two.
+// Served as screen.html beside index.html on the same origin, so it is same-origin with Moonraker.
+// ---------------------------------------------------------------------------
+const screenOpts = {
+  entryPoints: ["src/screen/main.jsx"],
+  bundle: true,
+  outfile: "dist/screen.js",
+  format: "iife",
+  target: ["es2020"],
+  jsx: "transform",
+  jsxFactory: "React.createElement",
+  jsxFragment: "React.Fragment",
+  alias: opts.alias,
+  sourcemap: true,
+  minify: !watch,
+  logLevel: "info",
+  define: { "process.env.NODE_ENV": '"production"' },
+};
 // ---------------------------------------------------------------------------
 // The 3D G-code viewer ships as a SEPARATE, lazily-loaded bundle.
 //
@@ -79,14 +103,28 @@ if (!haveViewer && existsSync(VIEWER_ENTRY)) {
   console.log("[build] viewer entry present but gcode-preview/three are not installed — skipping dist/viewer.js");
 }
 
+// The 12px type floor is the contract the whole 1024x600 panel layout rests on, and
+// a violation is invisible from a laptop. Fail the build rather than ship it.
+{
+  const { execFileSync } = await import("node:child_process");
+  try {
+    execFileSync(process.execPath, ["tools/check_screen_type.mjs"], { stdio: "inherit" });
+  } catch (e) {
+    process.exit(1);
+  }
+}
+
 if (watch) {
   const c = await context(opts);
   await c.watch();
+  const sc = await context(screenOpts);
+  await sc.watch();
   if (haveViewer) { const v = await context(viewerOpts); await v.watch(); }
   if (haveEditor) { const e = await context(editorOpts); await e.watch(); }
   console.log("watching…");
 } else {
   await build(opts);
+  await build(screenOpts);
   if (haveViewer) await build(viewerOpts);
   if (haveEditor) await build(editorOpts);
 }

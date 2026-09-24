@@ -1,0 +1,47 @@
+# Carbon Screen kiosk — the printer's physical touchscreen.
+#
+# Generated/installed by tools/kiosk/install_kiosk.sh, which fills in USER and TTY
+# by READING the existing KlipperScreen unit rather than guessing them.
+[Unit]
+Description=Carbon Screen kiosk (Chromium on the printer panel)
+# Both want the same panel and the same tty. Declaring it means systemd stops one
+# to start the other instead of leaving two X servers fighting over the console.
+Conflicts=KlipperScreen.service
+After=network-online.target nginx.service moonraker.service
+Wants=network-online.target
+# If the kiosk cannot stay up, put KlipperScreen back rather than leaving the
+# printer with no local UI at all. This is the automatic half of the rollback.
+OnFailure=carbon-kiosk-fallback.service
+
+[Service]
+Type=simple
+User=__USER__
+PAMName=login
+TTYPath=__TTY__
+TTYReset=yes
+TTYVHangup=yes
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=-/etc/default/carbon-kiosk
+Environment=XAUTHORITY=/home/__USER__/.Xauthority
+
+# Do not paint a kiosk at a UI that is not up yet: a Chromium error page is sticky
+# and nobody is standing there to reload it. Poll, then start.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do curl -fsS -o /dev/null "${KIOSK_URL:-http://127.0.0.1:8767/screen.html}" && exit 0; sleep 2; done; echo "carbon-kiosk: UI never came up"; exit 1'
+ExecStart=/usr/bin/xinit /home/__USER__/carbon-kiosk/carbon-kiosk-session.sh -- :0 __TTY_VT__ -nolisten tcp -noreset
+
+Restart=always
+RestartSec=5
+# Five failures inside two minutes is a real fault, not a blip -> let OnFailure fire.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+# Chromium on a 4 GB Pi 5 sharing with klipper/moonraker/crowsnest. MemoryMax is a
+# backstop, not a target; if it trips regularly the page is leaking.
+MemoryHigh=900M
+MemoryMax=1400M
+OOMPolicy=continue
+
+[Install]
+WantedBy=multi-user.target

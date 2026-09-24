@@ -1,0 +1,15 @@
+/* Carbon Screen: let the `network` group manage NetworkManager without sudo.
+ *
+ * KlipperScreen's installer wrote an equivalent file
+ * (/etc/polkit-1/rules.d/KlipperScreen.rules). Removing KlipperScreen removes it,
+ * and with it the ability of anything unprivileged to change wifi -- which is why
+ * Carbon ships its own rather than relying on the other one still being there.
+ *
+ * Install: sudo cp 60-carbon-network.rules /etc/polkit-1/rules.d/
+ */
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0 &&
+        subject.isInGroup("network")) {
+        return polkit.Result.YES;
+    }
+});

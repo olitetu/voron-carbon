@@ -1,0 +1,8 @@
+# Carbon Screen: make the panel backlight writable by the `video` group, so the
+# helper can set brightness without root. Without this, POST /helper/display/brightness
+# answers 403 and the app hides the brightness control.
+#
+# Install: sudo cp 60-carbon-backlight.rules /etc/udev/rules.d/
+#          sudo udevadm control --reload && sudo udevadm trigger -s backlight
+ACTION=="add", SUBSYSTEM=="backlight", RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness"
+ACTION=="add", SUBSYSTEM=="backlight", RUN+="/bin/chmod g+w /sys/class/backlight/%k/brightness"

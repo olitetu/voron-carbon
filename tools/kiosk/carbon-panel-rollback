@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# THE ESCAPE HATCH. One command, no arguments, puts KlipperScreen back on the panel.
+#
+#     sudo carbon-panel-rollback
+#
+# Installed to /usr/local/bin by install_kiosk.sh. Print it on a card and tape it
+# inside the enclosure: after cutover this panel is the only local UI, and the
+# moment you need this command is the moment you cannot look it up on the printer.
+set -u
+echo "Restoring KlipperScreen on the panel..."
+systemctl stop carbon-kiosk.service        2>/dev/null
+systemctl disable carbon-kiosk.service     2>/dev/null
+systemctl enable  KlipperScreen.service    2>/dev/null
+systemctl start   KlipperScreen.service
+sleep 2
+printf '  KlipperScreen : %s\n' "$(systemctl is-active KlipperScreen.service)"
+printf '  carbon-kiosk  : %s\n' "$(systemctl is-active carbon-kiosk.service)"
+echo
+echo "Carbon itself is untouched and still served on its port."
+echo "To go back to it:  sudo systemctl disable --now KlipperScreen && sudo systemctl enable --now carbon-kiosk"

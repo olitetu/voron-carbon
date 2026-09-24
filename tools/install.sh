@@ -23,6 +23,7 @@ set -euo pipefail
 
 # ── defaults ────────────────────────────────────────────────────────────────────────────────────
 PORT=8767
+HELPER_PORT=8770
 MOONRAKER_PORT=7125
 WEBCAM_PORT=8080          # crowsnest/ustreamer default; --webcam-port 0 disables the webcam proxy
 ROOT=""                   # where Carbon's files live; auto-detected if not given
@@ -40,6 +41,7 @@ Options:
   --moonraker-port N     Moonraker's port on this host (default: $MOONRAKER_PORT)
   --webcam-port N        Webcam stream port; 0 to skip the webcam proxy (default: $WEBCAM_PORT)
   --site-name NAME       nginx site filename (default: $SITE_NAME)
+  --helper-port N        loopback port of the host helper (default: $HELPER_PORT)
   --dry-run              Show the plan and the generated config, change nothing
   --yes                  Don't prompt for confirmation
   --help
@@ -53,6 +55,7 @@ while [ $# -gt 0 ]; do
     --moonraker-port) MOONRAKER_PORT="${2:?}"; shift 2 ;;
     --webcam-port)    WEBCAM_PORT="${2:?}"; shift 2 ;;
     --site-name)      SITE_NAME="${2:?}"; shift 2 ;;
+    --helper-port)    HELPER_PORT="${2:?}"; shift 2 ;;
     --dry-run)        DRY_RUN=1; shift ;;
     --yes|-y)         ASSUME_YES=1; shift ;;
     --help|-h)        usage; exit 0 ;;
@@ -231,9 +234,40 @@ server {
     location = /editor.js  { add_header Cache-Control "no-cache"; }
     location = /base.css   { add_header Cache-Control "no-cache"; }
     location ^~ /vendor/   { add_header Cache-Control "no-cache"; }
+
+    # Carbon Screen — the printer's own touch panel. A kiosk has nobody to press
+    # reload, so none of these may ever be served stale.
+    location = /screen.html { add_header Cache-Control "no-store, no-cache, must-revalidate"; }
+    location = /screen.js   { add_header Cache-Control "no-store, no-cache, must-revalidate"; }
+    location = /screen.css  { add_header Cache-Control "no-store, no-cache, must-revalidate"; }
+    # Safe mode is the fallback when screen.js will not run. It must never come from
+    # a cache that might itself be the thing that is broken.
+    location = /safe.html   { add_header Cache-Control "no-store, no-cache, must-revalidate"; }
+    # Moonraker's update_manager reads this to decide whether an update exists.
+    location = /release_info.json { add_header Cache-Control "no-store"; }
     location ^~ /fonts/ {
         add_header Cache-Control "public, max-age=31536000, immutable";
         access_log off;
+    }
+
+    # Host helper — wifi and the panel backlight (tools/helper/). LOOPBACK ONLY:
+    # these actions belong to whoever is standing at the printer, not to the LAN.
+    # This is why the kiosk must open http://127.0.0.1:$PORT/screen.html and not the
+    # hostname — through the hostname the request arrives from the LAN address and
+    # is denied here, correctly.
+    #
+    # Absent helper: nginx answers 502 and the UI hides every control it powers.
+    location ^~ /helper/ {
+        allow 127.0.0.1;
+        allow ::1;
+        deny all;
+
+        proxy_pass http://127.0.0.1:$HELPER_PORT/;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_read_timeout 210s;     # above a wifi connect's worst case with rollback: CONNECT_CEILING, 182 s
+        proxy_buffering off;
     }
 
     # Moonraker's websocket.

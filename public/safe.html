@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1024, height=600, initial-scale=1, user-scalable=no">
+<title>Carbon Screen — Safe Mode</title>
+<!--
+  SAFE MODE. No build step, no bundle, no framework, no vendored anything — one
+  self-contained file that cannot be broken by a bad deploy of screen.js.
+
+  It exists because after KlipperScreen is gone this panel is the ONLY local UI on
+  the machine. A JS exception in the app bundle would otherwise leave a black
+  screen with no emergency stop, no restart and no console, in front of a printer
+  that may be mid-print. This page is what the kiosk falls back to, and what the
+  app itself links to when it fails to boot.
+
+  Same-origin with Moonraker (nginx on :8767 proxies it), so no CORS and no config.
+-->
+<style>
+  :root{
+    --bg:#06080b;--panel:#0b0f15;--head:#0d121a;--line:#1c2430;--line2:#24303f;
+    --ink:#e8eef6;--body:#c9d3e0;--dim:#8b98aa;--faint:#4d5a6b;--ghost:#3d4859;
+    --accent:#ff5a33;--abg:#1a0c08;--aline:#4a1d13;--ok:#3ddcc4;--okbg:#07231d;--okline:#114339;
+    --warn:#f0b429;--warnbg:#231604;--warnline:#4a3a10;
+    --mono:'JetBrains Mono',ui-monospace,'DejaVu Sans Mono',monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);overflow:hidden}
+  body{
+    font-family:var(--mono);color:var(--body);font-size:14px;
+    -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;
+    touch-action:manipulation;cursor:none;
+    display:flex;flex-direction:column;
+  }
+  header{
+    height:52px;flex:none;display:flex;align-items:center;gap:14px;padding:0 14px;
+    background:#090c11;border-bottom:1px solid #161d27;
+  }
+  #dot{width:9px;height:9px;border-radius:50%;background:var(--ghost);flex:none}
+  header .t{font-size:13px;letter-spacing:.18em;color:var(--warn)}
+  header .s{font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  header .r{margin-left:auto;font-size:12px;color:var(--faint);white-space:nowrap}
+  main{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px}
+  .col{display:flex;flex-direction:column;gap:10px;min-height:0}
+  button{
+    font-family:var(--mono);font-size:13px;letter-spacing:.16em;color:var(--dim);
+    background:var(--head);border:1px solid var(--line);border-radius:7px;
+    height:60px;cursor:pointer;flex:none;
+  }
+  button:active{transform:translateY(1px)}
+  button.stop{height:96px;font-size:16px;color:var(--accent);background:var(--abg);border-color:var(--aline)}
+  button.warn{color:var(--warn);background:var(--warnbg);border-color:var(--warnline)}
+  #log{
+    flex:1;min-height:0;overflow-y:auto;background:#0a0e13;border:1px solid var(--line);
+    border-radius:7px;padding:8px 10px;font-size:12px;line-height:1.55;color:var(--dim);
+    white-space:pre-wrap;word-break:break-word;
+  }
+  #log .e{color:var(--accent)}
+  #log .o{color:var(--ok)}
+  form{display:flex;gap:8px;flex:none}
+  input{
+    flex:1;min-width:0;font-family:var(--mono);font-size:14px;color:var(--ink);
+    background:#0a0e13;border:1px solid var(--line);border-radius:7px;padding:0 12px;height:52px;outline:none;
+  }
+  input:focus{border-color:var(--aline)}
+  form button{width:104px;height:52px}
+  .lbl{font-size:11px;letter-spacing:.2em;color:var(--faint);flex:none}
+  a{color:var(--accent);text-decoration:none}
+  footer{flex:none;padding:0 14px 10px;font-size:11px;color:var(--ghost);letter-spacing:.06em}
+</style>
+</head>
+<body>
+<header>
+  <span id="dot"></span>
+  <span class="t">SAFE MODE</span>
+  <span class="s" id="state">connecting&hellip;</span>
+  <span class="r" id="temps"></span>
+</header>
+
+<main>
+  <div class="col">
+    <button class="stop" id="estop" type="button">&#9211; EMERGENCY STOP</button>
+    <button class="warn" id="fw" type="button">FIRMWARE RESTART</button>
+    <button class="warn" id="rk" type="button">RESTART KLIPPER</button>
+    <button id="full" type="button">TRY THE FULL UI</button>
+    <button id="logs" type="button">DOWNLOAD KLIPPY LOG</button>
+  </div>
+  <div class="col">
+    <span class="lbl">CONSOLE</span>
+    <div id="log" aria-live="polite"></div>
+    <form id="send" autocomplete="off">
+      <input id="cmd" placeholder="G-code&hellip;" spellcheck="false" autocapitalize="off">
+      <button type="submit">SEND</button>
+    </form>
+  </div>
+</main>
+<footer>This page has no dependencies. If it works and the main UI does not, the fault is in screen.js.</footer>
+
+<script>
+(function () {
+  "use strict";
+  var log = document.getElementById("log");
+  var dot = document.getElementById("dot");
+  var stateEl = document.getElementById("state");
+  var tempEl = document.getElementById("temps");
+  var id = 0, pending = {}, ws = null;
+
+  // Happy Hare decorates its responses with HTML: real lines from this printer look
+  // like  <b><span style="color:#87CEEB">UNLOADED</span></b>  and  <span
+  // style="color:#C0C0C0">(e:0.0mm)</span>. Rendered literally that is a wall of
+  // markup in the one UI you get when everything else is broken. Strip the tags and
+  // decode the handful of entities Klipper emits -- then still assign via
+  // textContent, so nothing here can ever become live markup.
+  function plain(text) {
+    return String(text)
+      .replace(/<br\s*\/?>/gi, " ")
+      .replace(/<[^>]*>/g, "")
+      .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+      .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
+      .replace(/[ \t]+/g, " ")
+      .trim();
+  }
+
+  function line(text, cls) {
+    var d = document.createElement("div");
+    if (cls) d.className = cls;
+    d.textContent = plain(text);
+    log.appendChild(d);
+    while (log.childNodes.length > 400) log.removeChild(log.firstChild);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function rpc(method, params) {
+    return new Promise(function (resolve, reject) {
+      if (!ws || ws.readyState !== 1) { reject(new Error("not connected")); return; }
+      var n = ++id;
+      pending[n] = { resolve: resolve, reject: reject };
+      ws.send(JSON.stringify({ jsonrpc: "2.0", method: method, params: params || {}, id: n }));
+      setTimeout(function () {
+        if (pending[n]) { delete pending[n]; reject(new Error("timeout")); }
+      }, 30000);
+    });
+  }
+
+  function setState(text, colour) {
+    stateEl.textContent = text;
+    dot.style.background = colour;
+  }
+
+  function connect() {
+    var proto = location.protocol === "https:" ? "wss:" : "ws:";
+    ws = new WebSocket(proto + "//" + location.host + "/websocket");
+    ws.onopen = function () {
+      setState("connected", "#3ddcc4");
+      rpc("printer.objects.subscribe", {
+        objects: { webhooks: null, print_stats: null, extruder: ["temperature", "target"],
+                   heater_bed: ["temperature", "target"] }
+      }).then(apply).catch(function () {});
+      rpc("server.gcode_store", { count: 40 }).then(function (r) {
+        (r.gcode_store || []).forEach(function (e) {
+          line(e.message, /^!!/.test(e.message) ? "e" : null);
+        });
+      }).catch(function () {});
+    };
+    ws.onclose = function () {
+      setState("moonraker offline - retrying", "#ff5a33");
+      setTimeout(connect, 2000);
+    };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+    ws.onmessage = function (m) {
+      var msg; try { msg = JSON.parse(m.data); } catch (e) { return; }
+      var batch = Array.isArray(msg) ? msg : [msg];
+      for (var i = 0; i < batch.length; i++) {
+        var j = batch[i];
+        if (j.id !== undefined && pending[j.id]) {
+          var p = pending[j.id]; delete pending[j.id];
+          if (j.error) p.reject(new Error(j.error.message || "error")); else p.resolve(j.result);
+          continue;
+        }
+        if (j.method === "notify_gcode_response") {
+          var t = (j.params && j.params[0]) || "";
+          line(t, /^!!/.test(t) ? "e" : null);
+        } else if (j.method === "notify_status_update") {
+          apply({ status: (j.params && j.params[0]) || {} });
+        } else if (j.method === "notify_klippy_shutdown") {
+          setState("klipper shutdown", "#ff5a33");
+        } else if (j.method === "notify_klippy_ready") {
+          setState("ready", "#3ddcc4");
+        }
+      }
+    };
+  }
+
+  // notify_status_update is INCREMENTAL: a webhooks push can carry `state` with no
+  // `state_message`, and reading it straight through blanked the reason text on
+  // every update. Cache each field and render from the cache -- the same trap the
+  // temperatures fall into, and why they are cached too.
+  var cache = { e: null, b: null, state: null, msg: "" };
+  function apply(r) {
+    var s = (r && r.status) || {};
+    if (s.webhooks) {
+      if (s.webhooks.state) cache.state = s.webhooks.state;
+      if (s.webhooks.state_message !== undefined) cache.msg = s.webhooks.state_message || "";
+      if (cache.state) {
+        setState(cache.state + (cache.msg ? " - " + plain(cache.msg).split("\n")[0] : ""),
+                 cache.state === "ready" ? "#3ddcc4" : "#ff5a33");
+      }
+    }
+    if (s.extruder && s.extruder.temperature !== undefined) cache.e = s.extruder.temperature;
+    if (s.heater_bed && s.heater_bed.temperature !== undefined) cache.b = s.heater_bed.temperature;
+    tempEl.textContent =
+      (cache.e === null ? "" : "N " + cache.e.toFixed(0) + "  ") +
+      (cache.b === null ? "" : "B " + cache.b.toFixed(0));
+  }
+
+  function confirmThen(label, fn) {
+    return function () {
+      if (window.confirm(label)) {
+        fn().then(function () { line("> " + label, "o"); })
+            .catch(function (e) { line("!! " + e.message, "e"); });
+      }
+    };
+  }
+
+  document.getElementById("estop").onclick =
+    confirmThen("EMERGENCY STOP - halt the printer now?", function () { return rpc("printer.emergency_stop"); });
+  document.getElementById("fw").onclick =
+    confirmThen("Firmware restart?", function () { return rpc("printer.firmware_restart"); });
+  document.getElementById("rk").onclick =
+    confirmThen("Restart the Klipper host service?", function () { return rpc("printer.restart"); });
+  document.getElementById("full").onclick = function () { location.href = "./screen.html"; };
+  document.getElementById("logs").onclick = function () { location.href = "/server/files/logs/klippy.log"; };
+
+  document.getElementById("send").onsubmit = function (ev) {
+    ev.preventDefault();
+    var el = document.getElementById("cmd");
+    var script = el.value.trim();
+    if (!script) return;
+    line("> " + script);
+    el.value = "";
+    rpc("printer.gcode.script", { script: script })
+      .catch(function (e) { line("!! " + e.message, "e"); });
+  };
+
+  connect();
+})();
+</script>
+</body>
+</html>

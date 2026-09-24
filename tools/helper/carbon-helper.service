@@ -1,0 +1,43 @@
+# Carbon Screen host helper.
+#   sudo cp carbon-helper.service /etc/systemd/system/
+#   sudo systemctl enable --now carbon-helper
+[Unit]
+Description=Carbon Screen host helper (wifi, backlight) for the printer touchscreen
+Documentation=https://github.com/olitetu/voron-carbon
+After=network.target NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+# Same user as klipper/moonraker. Must be in the `network` group -- see
+# 60-carbon-network.rules. NEVER root: nothing here needs it.
+User=%i
+Environment=CARBON_HELPER_PORT=8770
+Environment=CARBON_HELPER_IFACE=wlan0
+Environment=DISPLAY=:0
+ExecStart=/usr/bin/python3 /home/%i/carbon-helper/carbon_helper.py
+Restart=always
+RestartSec=3
+
+# --- hardening. The helper shells out to nmcli and writes one sysfs file; it
+#     has no business doing anything else.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/sys/class/backlight
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+# Loopback only, so no need for anything but AF_UNIX/AF_INET.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
