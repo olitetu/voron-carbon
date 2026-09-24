@@ -26,10 +26,10 @@
 //   · MOONRAKER DOES NOT KNOW THE SSID. system_info carries the interface, its addresses and the MAC, nothing
 //     more. Without the helper the SSID is shown as unknown, with that reason, not a guess.
 //
-//   · THE HELPER IS NOT INSTALLED TODAY (2026-09-23). From the LAN, :8767/helper/health answers 404. Its
-//     nginx block would answer 403 to a LAN client (allow 127.0.0.1; deny all), so the block is absent.
-//     :8767/screen.html is 404 as well. The helper is also loopback-only by design, so a page opened as
-//     voron.local is read-only even after it is installed. The read-only panel says which of the two it is.
+//   · THE HELPER IS OPTIONAL AND LOOPBACK-ONLY. Its nginx block answers 403 to a LAN client (allow 127.0.0.1;
+//     deny all), and the helper itself refuses a request nginx did not accept on loopback. So a page opened
+//     as voron.local is read-only even with the helper installed; only the kiosk's 127.0.0.1 page can change
+//     wifi. Before the helper is installed, /helper/ answers 502 on loopback. The read-only panel says which.
 //
 //   · WHAT THE HELPER REFUSES, THIS SCREEN DOES NOT OFFER. The helper will not forget the profile wlan0 is
 //     connected through, and will not switch the radio off while a wifi profile is up. Both answer 409,
@@ -357,11 +357,15 @@ export default function Network({ st, meta, say, api, act, askInput, probeHelper
     const e = res.e, d = (e && e.data) || {};
     if (helperAnswered(e)) {
       if (d.net) acceptNet(d.net);
-      // The helper reverts only when the previous profile was a different one.
-      const back = d.previous && d.previous !== ssid
-        ? (d.reverted ? `back on ${d.previous}` : `and could NOT get back onto ${d.previous}`) : "";
-      const pw = e.status === 401 && /secret|password|psk/i.test(d.error);
-      act.refuse(`CONNECT ${ssid}`, [pw ? "password rejected" : d.error, back].filter(Boolean).join(" — "));
+      // The helper says which of three things happened to the previous link: it never touched it (the new
+      // profile failed before wlan0 moved), it brought it back, or it could not.
+      const back = !d.previous ? ""
+        : d.untouched ? `still on ${d.previous}`
+        : d.reverted ? `back on ${d.previous}`
+        : `and could NOT get back onto ${d.previous}`;
+      const pw = e.status === 401 && /secret|password|psk/i.test(d.error || "");
+      const leftover = d.cleanup ? `a saved profile could not be removed (${d.cleanup})` : "";
+      act.refuse(`CONNECT ${ssid}`, [pw ? "password rejected" : d.error, back, leftover].filter(Boolean).join(" — "));
       // A SAVED network whose stored secret was rejected: ask for a new one (it confirms again).
       if (e.status === 401 && !psk && ap && alive.current) startConnect(ap, true);
       return;
@@ -383,7 +387,7 @@ export default function Network({ st, meta, say, api, act, askInput, probeHelper
   const confirmConnect = ({ ssid, psk, hidden, ap }) => setConfirm({
     label: `CONNECT ${ssid}`,
     join: ssid,
-    cmd: `nmcli device wifi connect "${ssid}" ifname ${iface}${hidden ? " hidden yes" : ""}${psk ? (helper.pskViaArgv ? " · password in argv" : " · password on stdin") : ""}`,
+    cmd: `nmcli device wifi connect "${ssid}" ifname ${iface}${hidden ? " hidden yes" : ""}${psk ? " · password on stdin" : ""}`,
     exec: () => doConnect({ ssid, psk, hidden, ap }),
   });
 

@@ -1,15 +1,46 @@
-/* Carbon Screen: let the `network` group manage NetworkManager without sudo.
+/* Carbon Screen host helper: the NetworkManager actions carbon_helper.py needs,
+ * for the carbon-net service user and nobody else.
  *
- * KlipperScreen's installer wrote an equivalent file
- * (/etc/polkit-1/rules.d/KlipperScreen.rules). Removing KlipperScreen removes it,
- * and with it the ability of anything unprivileged to change wifi -- which is why
- * Carbon ships its own rather than relying on the other one still being there.
+ * Installed by tools/helper/install_helper.sh as
+ * /etc/polkit-1/rules.d/60-carbon-network.rules. polkitd reads rules from there and
+ * from /usr/share/polkit-1/rules.d (polkit(8)).
  *
- * Install: sudo cp 60-carbon-network.rules /etc/polkit-1/rules.d/
+ * WHY THIS NARROW
+ *   carbon-net is a system user that only carbon-helper.service runs as, from
+ *   root-owned code. Matching the user, not a group, means no other process of the
+ *   printer user (olitetu), Moonraker included, gains these rights from this file.
+ *   The action ids are listed exactly -- no prefix match -- so the helper cannot
+ *   change the hostname or global DNS, put NetworkManager to sleep, disable
+ *   networking, reload it, roll back checkpoints or start a hotspot. Each id:
+ *     network-control          activate and deactivate profiles: the connect, and
+ *                              the rollback
+ *     enable-disable-wifi      nmcli radio wifi on|off
+ *     settings.modify.system   add, update and delete system-wide profiles
+ *     wifi.scan                nmcli device wifi rescan / list --rescan yes. An id
+ *                              this NetworkManager does not define grants nothing,
+ *                              so listing it is harmless where it is absent;
+ *                              `pkaction | grep NetworkManager` shows the ids it has.
+ *
+ * KLIPPERSCREEN
+ *   KlipperScreen's installer writes its own KlipperScreen.rules, to
+ *   /usr/share/polkit-1/rules.d when that directory exists and to
+ *   /etc/polkit-1/rules.d otherwise. Depending on its version it grants
+ *   NetworkManager to the `network` group and/or to the printer user by name (plus
+ *   login1 reboot/power-off). Which copy is on this Pi, what it grants, and whether
+ *   it compiles is unverified: check with
+ *     sudo cat /usr/share/polkit-1/rules.d/KlipperScreen.rules /etc/polkit-1/rules.d/KlipperScreen.rules
+ *   This rule does not depend on it, and removing KlipperScreen does not break the
+ *   helper. Until that file is gone, though, the printer user's processes can still
+ *   change wifi without going through the helper (docs/CUTOVER.md).
  */
 polkit.addRule(function(action, subject) {
-    if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0 &&
-        subject.isInGroup("network")) {
+    var allowed = {
+        "org.freedesktop.NetworkManager.network-control": true,
+        "org.freedesktop.NetworkManager.enable-disable-wifi": true,
+        "org.freedesktop.NetworkManager.settings.modify.system": true,
+        "org.freedesktop.NetworkManager.wifi.scan": true
+    };
+    if (subject.user === "carbon-net" && allowed[action.id] === true) {
         return polkit.Result.YES;
     }
 });

@@ -1,31 +1,45 @@
-# Carbon Screen host helper.
-#   sudo cp carbon-helper.service /etc/systemd/system/
-#   sudo systemctl enable --now carbon-helper
+# Carbon Screen host helper (tools/helper/carbon_helper.py).
+#
+# Installed by tools/helper/install_helper.sh, which first creates the carbon-net
+# system user and copies the program to /usr/local/lib/carbon-helper, root-owned.
+# Do not copy this file by hand. Nothing in it is a placeholder, and nothing here
+# can make it run as root: if the carbon-net user does not exist, systemd refuses
+# to start the unit (status=217/USER); it does not fall back to root. The program
+# also refuses to run as root.
 [Unit]
-Description=Carbon Screen host helper (wifi, backlight) for the printer touchscreen
+Description=Carbon Screen host helper (wifi, screen-off) for the printer touchscreen
 Documentation=https://github.com/olitetu/voron-carbon
 After=network.target NetworkManager.service
 Wants=NetworkManager.service
 
 [Service]
 Type=simple
-# Same user as klipper/moonraker. Must be in the `network` group -- see
-# 60-carbon-network.rules. NEVER root: nothing here needs it.
-User=%i
+# A dedicated system user: no home, no login shell, no groups (plus `video`, only
+# when a backlight device exists). Its NetworkManager rights come from
+# 60-carbon-network.rules, which names this user and nobody else. NEVER root.
+User=carbon-net
 Environment=CARBON_HELPER_PORT=8770
 Environment=CARBON_HELPER_IFACE=wlan0
+# Screen-off runs xset against the kiosk's X server, which must admit this user:
+# `xhost +SI:localuser:carbon-net` in carbon-kiosk-session.sh. PrivateTmp hides
+# /tmp/.X11-unix, so Xlib reaches X through its abstract socket
+# (@/tmp/.X11-unix/X0; on the Pi, `ss -xl | grep X11` should list it -- unverified).
+# Without either, /display reports blank_supported: false and nothing is offered.
 Environment=DISPLAY=:0
-ExecStart=/usr/bin/python3 /home/%i/carbon-helper/carbon_helper.py
+# Root-owned code outside every home directory: nothing the printer user, Moonraker,
+# or the LAN through Moonraker's file API can rewrite.
+ExecStart=/usr/bin/python3 /usr/local/lib/carbon-helper/carbon_helper.py
 Restart=always
 RestartSec=3
 
-# --- hardening. The helper shells out to nmcli and writes one sysfs file; it
-#     has no business doing anything else.
+# --- hardening. The helper shells out to nmcli and xset and writes one sysfs file;
+#     it has no business doing anything else.
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/sys/class/backlight
+ProtectHome=yes
+# "-": ignored when the directory does not exist (systemd.exec(5)).
+ReadWritePaths=-/sys/class/backlight
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
@@ -34,8 +48,14 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
-# Loopback only, so no need for anything but AF_UNIX/AF_INET.
+# D-Bus and X are AF_UNIX; the HTTP socket is AF_INET on 127.0.0.1.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# Loopback only, enforced by the kernel as well as by the bind address
+# (systemd.resource-control(5); `localhost` is 127.0.0.0/8 and ::1). This needs
+# cgroup BPF: without it systemd logs "BPF firewalling not supported" and does not
+# apply the filter. install_helper.sh looks for that line.
+IPAddressDeny=any
+IPAddressAllow=localhost
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 

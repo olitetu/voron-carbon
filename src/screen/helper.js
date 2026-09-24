@@ -17,16 +17,18 @@ const BASE = "/helper";
 const TIMEOUT = 8000;
 
 // How long the helper can take. These mirror carbon_helper.py's CONNECT_CEILING and QUICK_CEILING, the sums
-// of its nmcli timeouts, and must move with them, as must nginx's /helper/ proxy_read_timeout (210 s, in
-// tools/install.sh and tools/helper/nginx-helper.conf).
-/** Worst case of one /wifi/connect with its rollback: CONNECT_CEILING is 182 s. Until this much time has
- *  passed since it was sent, a connect whose answer was lost may still be running under the helper's lock. */
-export const CONNECT_CEILING_MS = 185000;
+// of its nmcli timeouts, and must move with them, as must nginx's /helper/ proxy_read_timeout (240 s, in the
+// /helper/ block tools/install.sh generates; tools/helper/nginx-helper.conf is only a reference copy of it).
+// The helper never queues a change behind another: a second one gets 409 at once, so no lock wait adds to these.
+/** Worst case of one /wifi/connect with its cleanup and rollback: CONNECT_CEILING is 217 s (hidden network;
+ *  194 s otherwise). Until this much time has passed since it was sent, a connect whose answer was lost may
+ *  still be running under the helper's lock. */
+export const CONNECT_CEILING_MS = 220000;
 /** helper.connect() gives up after this. It is above CONNECT_CEILING_MS, so the helper's own answer, success
  *  or rollback, always arrives first, and an abort means the helper has already finished or died. */
-export const CONNECT_TIMEOUT_MS = 210000;
-/** Worst case of a forget or radio change (QUICK_CEILING, 55 s: the active-profile check, then one nmcli
- *  run). helper.js gives up on those after TIMEOUT, long before, so a lost answer may still be acted on. */
+export const CONNECT_TIMEOUT_MS = 240000;
+/** Worst case of a forget or radio change (QUICK_CEILING, 55 s: one profile read, then one nmcli run).
+ *  helper.js gives up on those after TIMEOUT, long before, so a lost answer may still be acted on. */
 export const CHANGE_CEILING_MS = 60000;
 
 async function call(path, { method = "GET", body, timeout = TIMEOUT } = {}) {
@@ -60,7 +62,8 @@ export const helper = {
   /** /health's `nmcli`: the helper found nmcli. Without it the helper answers but can neither read nor change
    *  wifi (every /net says state unknown), so the network screen stays read-only and says nmcli is missing. */
   nmcli: false,
-  /** true when this nmcli would not take the wifi secret on stdin (see the daemon). */
+  /** Always false: the helper sends the wifi secret to nmcli on stdin only, and has no argv fallback. Its
+   *  /health still carries psk_via_argv (always false) and network.jsx still reads this, so it stays. */
   pskViaArgv: false,
   /** true when a writable /sys/class/backlight device exists. FALSE on this printer:
    *  the panel is HDMI, which has no backlight node, so there is no software
@@ -75,7 +78,6 @@ export const helper = {
       const h = await call("/health", { timeout: 2500 });
       this.available = !!(h && h.ok);
       this.nmcli = !!(h && h.nmcli);
-      this.pskViaArgv = !!(h && h.psk_via_argv);
       if (this.available) {
         try {
           const d = await call("/display", { timeout: 2500 });
