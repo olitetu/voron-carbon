@@ -63,7 +63,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-say()  { printf '  %s\n' "$*"; }
+# || true: a write error (hung-up SSH tty) inside a function exits under -e WITHOUT the ERR trap (no -E).
+say()  { printf '  %s\n' "$*" || true; }
 fail() { printf '\nFAILED: %s\n' "$*" >&2; exit 1; }
 
 echo
@@ -144,7 +145,9 @@ if [ -z "$ROOT" ]; then
   [ -n "$ROOT" ] || fail "Could not find Carbon's index.html. Pass --root /path/to/carbon"
 fi
 [ -d "$ROOT" ] || fail "$ROOT does not exist. Build Carbon first with: npm ci && npm run build"
-ROOT="$(cd "$ROOT" && pwd)"
+# Separate variable: `ROOT=$(…) || fail` would already have emptied ROOT when fail prints it.
+ROOT_ABS="$(cd "$ROOT" && pwd)" || fail "Cannot cd into $ROOT as $(id -un). Check its permissions, or pass another --root."
+ROOT="$ROOT_ABS"
 [ -f "$ROOT/index.html" ] || fail "$ROOT/index.html does not exist — is --root right?"
 say "Carbon files: $ROOT"
 [ -f "$ROOT/app.js" ] || say "WARNING: $ROOT/app.js is missing — the app will not load."
@@ -382,7 +385,8 @@ fi
 
 if [ "$ASSUME_YES" != 1 ]; then
   echo
-  read -r -p "  Proceed? [y/N] " reply
+  # read returns 1 at EOF (^D, or no tty and no --yes): treat that as N instead of exiting silently.
+  read -r -p "  Proceed? [y/N] " reply || reply=""
   case "$reply" in [yY]*) ;; *) echo "  Aborted; nothing changed."; exit 0 ;; esac
 fi
 
@@ -431,7 +435,7 @@ say "wrote $SITE_FILE"
 if ! sudo nginx -t 2>/tmp/carbon-nginx-test.log; then
   trap - ERR INT TERM HUP
   say "nginx -t FAILED with the new site in place:"
-  sed 's/^/       /' /tmp/carbon-nginx-test.log >&2
+  sed 's/^/       /' /tmp/carbon-nginx-test.log >&2 || true   # display only: must not skip the rollback
   restore_site
   fail "Rolled back to the previous on-disk state."
 fi
@@ -442,7 +446,7 @@ if [ "$LAYOUT" = sites ] && [ ! -L "$LINK_FILE" ]; then
   if ! sudo nginx -t 2>/tmp/carbon-nginx-test.log; then
     trap - ERR INT TERM HUP
     say "nginx -t FAILED after enabling:"
-    sed 's/^/       /' /tmp/carbon-nginx-test.log >&2
+    sed 's/^/       /' /tmp/carbon-nginx-test.log >&2 || true   # display only: must not skip the rollback
     restore_site
     fail "Rolled back to the previous on-disk state."
   fi
@@ -482,11 +486,14 @@ if [ "$WEBCAM_PORT" != "0" ]; then
   [ "$got" = "200" ] && printf '  ok    %-16s %s\n' "/webcam/" "$got" \
                      || printf '  note  %-16s %s (no camera, or a different webcam port)\n' "/webcam/" "$got"
 fi
-WS="$(curl -s -i -m 10 \
+# A websocket that upgrades stays open, so curl only ever ends here by its own -m timeout (exit 28),
+# or by SIGPIPE once head has its line. Under pipefail either one used to fail the assignment and
+# end the script silently, before this line printed and before "Done". Only the status code matters.
+WS="$(curl -s -i -m 3 \
       -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
       -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
       -H "Host: 127.0.0.1:$PORT" -H "Origin: http://127.0.0.1:$PORT" \
-      "$H/websocket" 2>/dev/null | head -1 | awk '{print $2}')"
+      "$H/websocket" 2>/dev/null | head -1 | awk '{print $2}' || true)"
 [ "$WS" = "101" ] && printf '  ok    %-16s 101 Switching Protocols\n' "/websocket" \
                   || { printf '  FAIL  %-16s %s (expected 101)\n' "/websocket" "${WS:-no response}"; ok=0; }
 

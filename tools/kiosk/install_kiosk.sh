@@ -29,8 +29,10 @@ while [ $# -gt 0 ]; do
 done
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-say()  { printf '\033[38;5;209m==>\033[0m %s\n' "$*"; }
-warn() { printf '\033[38;5;214m /!\\\033[0m %s\n' "$*"; }
+# || true: after an SSH hangup (trap '' HUP) writes to the dead pty fail with EIO, and
+# a lost message must not end the script under set -e mid-swap.
+say()  { printf '\033[38;5;209m==>\033[0m %s\n' "$*" || true; }
+warn() { printf '\033[38;5;214m /!\\\033[0m %s\n' "$*" || true; }
 fail() { printf '\033[38;5;203mxxx\033[0m %s\n' "$*" >&2; exit 1; }
 
 # The way back from KlipperScreen to Carbon, printed wherever one is needed.
@@ -58,8 +60,8 @@ if [ "$UNINSTALL" = 1 ]; then
   sudo systemctl disable --now carbon-kiosk.service || warn "disabling carbon-kiosk failed; continuing"
   sudo rm -f /etc/systemd/system/multi-user.target.wants/carbon-kiosk.service \
              /etc/systemd/system/carbon-kiosk.service /etc/systemd/system/carbon-kiosk-fallback.service \
-             /usr/local/bin/carbon-panel-rollback /etc/default/carbon-kiosk
-  sudo rm -rf "$LIBDIR"
+             /usr/local/bin/carbon-panel-rollback /etc/default/carbon-kiosk || warn "removing the kiosk files failed; continuing"
+  sudo rm -rf "$LIBDIR" || warn "removing $LIBDIR failed; continuing"
   sudo systemctl daemon-reload || warn "daemon-reload failed; continuing"
   sudo systemctl reset-failed carbon-kiosk.service carbon-kiosk-fallback.service 2>/dev/null || true
   sudo systemctl start KlipperScreen.service || warn "starting KlipperScreen failed; see the log below"
@@ -144,7 +146,8 @@ if [ "$DRY" = 1 ]; then
 fi
 
 # ── 4. install ──────────────────────────────────────────────────────────────────
-HOME_DIR="$(getent passwd "$KS_USER" | cut -d: -f6)"
+HOME_DIR="$(getent passwd "$KS_USER" | cut -d: -f6 || true)"
+[ -n "$HOME_DIR" ] || fail "no passwd entry for $KS_USER (User= of KlipperScreen.service). Nothing was installed."
 install -d -o "$KS_USER" -g "$KS_USER" "$HOME_DIR/carbon-kiosk"
 sudo install -m 0755 -o "$KS_USER" -g "$KS_USER" "$HERE/carbon-kiosk-session.sh" "$HOME_DIR/carbon-kiosk/carbon-kiosk-session.sh"
 sudo install -m 0755 -o "$KS_USER" -g "$KS_USER" "$HERE/carbon-kiosk-wait.sh" "$HOME_DIR/carbon-kiosk/carbon-kiosk-wait.sh"
@@ -194,7 +197,8 @@ fi
 echo
 warn "About to stop KlipperScreen and start Carbon on the panel."
 warn "KlipperScreen is only DISABLED — 'sudo carbon-panel-rollback' undoes this in one command."
-read -r -p "  Proceed? [y/N] " reply
+# EOF (^D, no tty) makes read return 1: take it as "no". Not || true: "y" then ^D leaves reply=y.
+read -r -p "  Proceed? [y/N] " reply || reply=""
 case "$reply" in [yY]*) ;; *) echo "  Aborted. Nothing was switched; the units are installed but not enabled."; exit 0 ;; esac
 
 # Order is the safety here: after every step the panel has a UI now or at next boot.
@@ -209,7 +213,8 @@ sudo systemctl disable KlipperScreen.service
 sync                                              # this Pi browns out: get the boot state onto disk first
 sudo systemctl stop KlipperScreen.service || true # explicit and ordered, not left to Conflicts= timing
 if ! sudo systemctl start carbon-kiosk.service; then
-  trap - HUP INT
+  # HUP/INT stay ignored through the rescue below: a ^C or a dropped session while the log
+  # prints must not stop the script before it hands the panel back. It exits right after.
   warn "carbon-kiosk failed to start. Recent log:"
   journalctl -u carbon-kiosk -n 30 --no-pager | sed 's/^/    /' || true
   # KlipperScreen is already stopped. Do not leave the panel dark while the start limit

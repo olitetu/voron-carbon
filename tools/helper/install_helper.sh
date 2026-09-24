@@ -150,7 +150,10 @@ if [[ -n "$LAN6" ]]; then lan_refused "[$LAN6]" "http://[$LAN6%25$IFACE]:$SITE_P
 # ================================================================ from here on, things change
 on_exit() {
   local rc=$?
-  (( rc == 0 )) && return 0
+  trap '' INT HUP   # a second ^C must not cut the disable below short
+  set +e   # errexit stays on in a trap: a warn to a hung-up SSH pty would end it before the disable
+  # Not rc == 0: a SIGHUP/SIGINT mid-command can run this trap with $? still 0 from the command before.
+  [[ -n "${INSTALL_DONE:-}" ]] && return 0
   warn "Install stopped (exit $rc). Nothing here touched NetworkManager; wifi is unchanged."
   if [[ -f "$UNIT" ]]; then
     sudo systemctl disable --now carbon-helper 2>/dev/null || true   # stops the Restart=always loop
@@ -158,6 +161,7 @@ on_exit() {
   fi
   warn "Undo the rest:  cd $TOP && bash tools/helper/install_helper.sh --uninstall"
 }
+INSTALL_DONE=""   # set only just before the final message; an inherited value must not skip the rollback
 trap on_exit EXIT
 
 say "Installing from $TOP (printer user: $USER_NAME, service user: $SVC_USER)"
@@ -298,6 +302,7 @@ if [[ -n "$LAN4" ]]; then
   say "  $LAN4:$HELPER_PORT -> refused"
 fi
 
+INSTALL_DONE=1   # on_exit: every check above passed
 cat <<NEXT
 
 Installed. Still to do by hand:
