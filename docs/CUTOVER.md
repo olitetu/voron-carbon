@@ -332,7 +332,9 @@ journalctl -u carbon-kiosk -u carbon-kiosk-fallback -f
 
 X exits, `Restart=` restarts it, and each attempt gives up after ~30 s ("UI never
 came up"). **KlipperScreen should take the panel by itself after about 2½ minutes**
-(4 attempts of ~35 s; the 5th is refused). Confirm:
+(4 attempts of ~35 s; the 5th is refused). Meanwhile the panel shows the console's
+`voron login:` prompt: Carbon's X never starts while its UI check fails, so the screen
+falls back to tty1. That is expected, not a hang. Confirm:
 
 ```bash
 journalctl -u carbon-kiosk | grep -i 'start request repeated'   # systemd gave up
