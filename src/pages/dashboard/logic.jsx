@@ -8,6 +8,7 @@
 import React from "react";
 import Template from "./Template.jsx";
 import GateEditor from "../../lib/GateEditor.jsx";
+import SettingsPanel from "./SettingsPanel.jsx";
 
 import { commonVals } from "./adapters/common.js";
 import { shellVals } from "./adapters/shell.js";
@@ -43,7 +44,7 @@ export class DashboardLogic extends React.Component {
   state = {
     // menus / overlays
     ledPicker: null, mmuMenuOpen: false, macroPickerOpen: false, servoMenuOpen: false,
-    soakMenuOpen: false, macroPickerFor: null, iconPickFor: null, mapOpen: null, recoverMenuOpen: false,
+    soakMenuOpen: false, macroPickerFor: null, iconPickFor: null, mapOpen: null, recoverMenuOpen: false, settingsOpen: false,
     excludeOpen: false, consoleExpanded: false,
     // MACROS starts COLLAPSED: it is a long grid of buttons and the owner wants it out of the way,
     // below MACHINE LIMITS. Persisted per browser via the same usePersisted-free pattern as the rest.
@@ -223,7 +224,7 @@ export class DashboardLogic extends React.Component {
 
   // ---- design helpers, kept verbatim -------------------------------------------------
   measure = () => {
-    const narrow = window.innerWidth < 1500;
+    const narrow = window.innerWidth < 1700;         // three columns only once the 595px webcam rail fits without scrolling
     const el = this._mmuHeader;
     // title + status ≈ 350px, guards ≈ 480px — keep them on one row only when both fit
     const guardsInline = !!el && el.clientWidth >= 880;
@@ -281,7 +282,7 @@ export class DashboardLogic extends React.Component {
   // The first click outside therefore dismisses rather than acting, which is how popovers behave
   // everywhere. Escape does the same. Modals are NOT in here — Modal (design.jsx) owns its own scrim.
   static POPS = ["ledPicker", "mmuMenuOpen", "macroPickerOpen", "servoMenuOpen", "soakMenuOpen",
-    "macroPickerFor", "iconPickFor", "mapOpen", "recoverMenuOpen"];
+    "macroPickerFor", "iconPickFor", "mapOpen", "recoverMenuOpen", "settingsOpen"];
 
   anyPopOpen() {
     return DashboardLogic.POPS.some(k => {
@@ -340,6 +341,13 @@ export class DashboardLogic extends React.Component {
       }
     }
     V.page = this.props.page;
+    // SETTINGS (top-bar cog). Rendered at the dashboard root, beside the scrim: see SettingsPanel.jsx for why.
+    V.toggleSettings = () => this.setState(s => ({ settingsOpen: !s.settingsOpen }));
+    V.settingsPanel = this.state.settingsOpen
+      ? <SettingsPanel store={this.props.store} api={this.props.api} log={this.log} act={this.act} onClose={() => this.setState({ settingsOpen: false })} />
+      : null;
+    V.settingsBtnStyle = "width:28px; height:28px; border-radius:4px; display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-size:11px; cursor:pointer; border:1px solid " +
+      (this.state.settingsOpen ? "#2c3746; color:#e8eef6; background:#131a24" : "#1c2430; color:#8b98aa");
     V.popScrimStyle = this.anyPopOpen()
       ? "position:fixed; inset:0; z-index:30; background:transparent"
       : "display:none";

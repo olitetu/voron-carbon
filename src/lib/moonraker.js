@@ -160,7 +160,12 @@ export class Moonraker {
       if (typeof onProgress === "function") onProgress(0, x);   // hand the caller the xhr so it can abort
     });
   }
-  async fileText(root, path) { const r = await fetch(this.fileUrl(root, path)); if (!r.ok) throw new Error(r.status); return r.text(); }
+  // cache:"no-cache" = ALWAYS revalidate. Moonraker sends Last-Modified and no Cache-Control, so WebKit may
+  // apply heuristic freshness (10% of the file's age: ~10 h for a config last touched four days ago) and hand
+  // back its cached copy without asking. The editor's re-read after SAVE then showed the OLD text labelled
+  // "in sync", and opening a file Happy Hare had just rewritten could seed a draft from a stale copy that
+  // SAVE would write back over the newer one. Revalidation costs a 0-byte 304 when nothing changed.
+  async fileText(root, path) { const r = await fetch(this.fileUrl(root, path), { cache: "no-cache" }); if (!r.ok) throw new Error(r.status); return r.text(); }
   // history
   historyList(params = { limit: 50, start: 0, order: "desc" }) { return this.rpc("server.history.list", params); }
   historyTotals() { return this.rpc("server.history.totals"); }
@@ -172,6 +177,9 @@ export class Moonraker {
   // returns -32601 Method not found, which this swallowed into a null active spool forever.
   spoolmanActive() { return this.rpc("server.spoolman.get_spool_id").then(r => r.spool_id); }
   spoolmanSetActive(spool_id) { return this.rpc("server.spoolman.post_spool_id", { spool_id }); }
+  // Clearing sends NO spool_id. Moonraker runs spool_id through int(), so an explicit null is a 400 ("unable to
+  // convert argument"); with the key absent its handler defaults to None, which clears the active spool.
+  spoolmanClearActive() { return this.rpc("server.spoolman.post_spool_id", {}); }
   // machine / updates
   serviceRestart(service) { return this.rpc("machine.services.restart", { service }); }
   serviceStop(service) { return this.rpc("machine.services.stop", { service }); }

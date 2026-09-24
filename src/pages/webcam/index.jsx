@@ -1,14 +1,14 @@
 // WEBCAM page — full-size viewing for every camera Moonraker knows about.
 //
-// None of the stream plumbing is re-implemented here: streamUrl / camTransform / fpsFromState /
+// None of the stream plumbing is re-implemented here: streamUrl / camTransform / fpsTrack / camStatus /
 // CLIENT_KEY come from the dashboard's adapter, which already documents why the delivered rate has
-// to be MEASURED out of ustreamer's /state (an <img> on multipart/x-mixed-replace fires no per-frame
-// load event, and `target_fps` is the configured rate, not what arrives).
+// to be MEASURED out of ustreamer's /state (an <img> on multipart/x-mixed-replace fires one load
+// event at its first frame and none after, and `target_fps` is the configured rate, not what arrives).
 import React from "react";
 import { Panel, Btn, Chip, Label, Val, Row, T, mono, fmtBytes } from "../../lib/design.jsx";
 import { S } from "../../lib/ui.js";
 import { useStore, usePersisted } from "../../lib/useStore.js";
-import { streamUrl, camTransform, fpsFromState, fpsTrack, CLIENT_KEY } from "../dashboard/adapters/webcam.js";
+import { streamUrl, camTransform, fpsTrack, camStatus, CLIENT_KEY } from "../dashboard/adapters/webcam.js";
 
 const NO_CAMS = [];                                  // stable identity: the poll effect must not re-arm every render
 const IDENT = { rot: 0, fh: false, fv: false };      // "as Moonraker configured it"
@@ -52,33 +52,30 @@ function effective(cam, d) {
   };
 }
 
+/** camStatus's palette-neutral kind in this page's colours. A warm-up "LIVE" is accent, as a healthy one. */
+const KIND_COLOUR = { ok: T.accent, off: T.accent, warn: T.warn, err: T.err };
+
 /** Delivered vs captured FPS, viewers, and the colour + wording the indicator should carry. */
 function status(camState, mode, track) {
-  const raw = fpsFromState(camState);
   // Only a live stream has CURRENT numbers. Both /state polls (boot's and this page's) stop while the
   // tab is hidden, and a still or a released stream leaves the last poll sitting there — reporting
-  // that as the rate would claim a frame rate for a connection that is no longer open.
-  // `track` adds the other half of that rule (see fpsTrack): a connection that has only just opened
-  // is reported by ustreamer at a fraction of its rate — 0 fps for the first sample — so the first
-  // sample is not a rate either, and a zero is only a stall once it has held for three of them.
-  const live = mode === "live";
-  const delivered = live && !track.settling ? raw.delivered : null;
-  const captured = live && !track.stale ? raw.captured : null;
-  const clients = live && !track.stale ? raw.clients : null;
-  const stalled = delivered === 0 && track.stalled;
-  // Well under what the sensor produces is bandwidth starvation, not a slow camera: ustreamer splits
-  // the pipe between clients and this host is on WiFi. Amber is the design's word for that. A zero is
-  // never starvation — it is the warm-up or a dead stream, and both have their own wording.
-  const starved = delivered !== null && delivered > 0 && captured !== null && captured > 0 && track.starving;
-  const s = { delivered, captured, clients, starved, stalled };
+  // that as the rate would claim a frame rate for a connection that is no longer open. camStatus adds
+  // the warm-up half of that rule (see fpsTrack). Amber (starved) is the design's word for bandwidth
+  // starvation: ustreamer splits the pipe between clients and this host is on WiFi.
+  const sx = camStatus(camState, track, mode === "live");
+  const s = { delivered: sx.delivered, captured: sx.captured, clients: sx.clients, starved: sx.starved, stalled: sx.stalled };
   if (mode === "disabled") return Object.assign(s, { label: "DISABLED", colour: T.ghost });
   if (mode === "offline") return Object.assign(s, { label: "OFFLINE", colour: T.faint });
   if (mode === "paused") return Object.assign(s, { label: "PAUSED", colour: T.faint });
   if (mode === "still") return Object.assign(s, { label: "STILL", colour: T.info });
   if (mode === "error") return Object.assign(s, { label: "STREAM LOST", colour: T.err });
-  if (delivered === null) return Object.assign(s, { label: "LIVE", colour: T.accent });   // warming up, or no /state
-  if (delivered === 0) return Object.assign(s, stalled ? { label: "STALLED · 0 FPS", colour: T.err } : { label: "LIVE", colour: T.accent });
-  return Object.assign(s, { label: `LIVE · ${delivered} FPS`, colour: starved ? T.warn : T.accent });
+  // A stream that dies AFTER its first frame fires no event here (see the <img> note below), but ustreamer's
+  // /state stops listing it: `missing` is camStatus's word for "no carbon connection in clients_stat while every
+  // entry carries a key". It cannot tell this tab from another desktop tab watching (they share key=carbon), so
+  // it reads NOT RECEIVING only once NO desktop viewer is left — never a false alarm, sometimes a late one.
+  if (sx.noSignal) return Object.assign(s, { label: "NO SIGNAL", colour: T.err });
+  if (sx.missing) return Object.assign(s, { label: "NOT RECEIVING", colour: T.err });
+  return Object.assign(s, { label: sx.label, colour: KIND_COLOUR[sx.kind] });   // "LIVE" while warming up, or with no /state
 }
 
 /** Adds a line to the shared console log (same shape DashboardLogic.log writes). */
@@ -301,9 +298,13 @@ function Cam({ cam, camState, api, store, visible, connected, single, total, foc
 
       <div ref={boxRef} style={S(`position:relative; overflow:hidden; display:flex; align-items:center; justify-content:center; border-bottom:1px solid ${T.line}; `
         + (fs ? `background:${T.bg}` : `aspect-ratio:${swap ? `${ah}/${aw}` : `${aw}/${ah}`}; ${single ? "max-height:70vh; " : ""}background:${HATCH}`))}>
-        {/* An <img> on multipart/x-mixed-replace fires `error` when the connection dies — the only
-            signal there is that the stream stopped, since it fires no per-frame load event. Without
-            it the chip would keep claiming LIVE over a broken-image glyph. */}
+        {/* `error` covers only a connection that fails BEFORE its first frame (a 404, nginx's 502 while
+            crowsnest is down); without it the chip would claim LIVE over a broken-image glyph. A stream
+            that dies AFTER its first frame fires nothing (measured in Chromium, see the adapter): a cut
+            clears the image, a clean close freezes it, and a closed connection drops out of /state
+            instead of reporting 0 fps, which status() reads as NOT RECEIVING. The touchscreen
+            probes naturalWidth for the cut; that is not copied here because only Chromium was
+            measured and this page also runs in Orca's WKWebView. */}
         {src ? <img ref={holdImg} src={src} alt="" style={S(imgStyle)}
           onError={() => { setLost(true); pushLog(store, `Webcam ${cam.name}: stream connection lost`, "err"); }} /> : null}
         {shot ? <img src={shot.url} alt="" style={S(imgStyle)} /> : null}
@@ -346,7 +347,7 @@ function Cam({ cam, camState, api, store, visible, connected, single, total, foc
       </Row>
 
       <div style={S("display:grid; grid-template-columns:repeat(auto-fit,minmax(94px,1fr)); gap:9px 12px; padding:10px 12px")}>
-        <Stat k="DELIVERED" color={sx.colour} title={`measured for this client (key=${CLIENT_KEY}) — target_fps is the configured rate, not what arrives`}
+        <Stat k="DELIVERED" color={sx.colour} title={`measured by ustreamer for Carbon's desktop connections (key=${CLIENT_KEY}, the best of them) — target_fps is the configured rate, not what arrives`}
           v={sx.delivered === null ? "—" : sx.delivered + " FPS"} />
         <Stat k="CAPTURED" v={sx.captured === null ? "—" : sx.captured + " FPS"} title="what the sensor is producing" />
         <Stat k="VIEWERS" v={sx.clients === null ? "—" : String(sx.clients)} title="clients ustreamer is currently feeding" />
@@ -356,7 +357,8 @@ function Cam({ cam, camState, api, store, visible, connected, single, total, foc
       </div>
 
       {sx.starved ? <div style={S(`padding:0 12px 10px; ${mono(9.5, `color:${T.warn}; line-height:1.6`)}`)}>
-        {`${sx.delivered} OF ${sx.captured} FPS ARRIVING — ustreamer divides the stream across ${sx.clients || 1} viewer${sx.clients === 1 ? "" : "s"} and this host is on WiFi. Closing other viewers gives this one the bandwidth back.`}
+        {/* One value for the number and its plural: `clients || 1` beside `clients === 1` read "1 VIEWERS". */}
+        {`${sx.delivered} OF ${sx.captured} FPS ARRIVING — ustreamer divides the stream across ${sx.clients || 1} viewer${(sx.clients || 1) === 1 ? "" : "s"} and this host is on WiFi. Closing other viewers gives this one the bandwidth back.`}
       </div> : null}
 
       {mode === "error" ? <div style={S(`padding:0 12px 10px; ${mono(9.5, `color:${T.err}; line-height:1.6`)}`)}>

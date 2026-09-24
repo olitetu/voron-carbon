@@ -15,7 +15,7 @@
 // Every action logs the command (or a short intent line), awaits api.gcode and logs errors; nothing throws.
 // Usage: const act = makeMmuActions({ api, store, log });   (merged with the other panels' actions by the integrator)
 
-import { geometry, cutTravel } from "../geometry.js";
+import { mmuHomeCommand, gateState } from "../hh.js";
 
 const NUM_GATES = 8;
 
@@ -190,8 +190,9 @@ export function makeMmuActions({ api, store, log } = {}) {
     if (blocked()) return false;
     if (printingNow()) { say("Refused — MMU_HOME moves the selector while printing (pause first)", "warn"); return false; }
     if (busy("MMU_HOME")) return false;
-    say("MMU_HOME — homing the selector", "warn");
-    return run("MMU_HOME", "Selector homed");
+    const cmd = mmuHomeCommand(mmu());
+    say(cmd + " — homing the selector" + (cmd !== "MMU_HOME" ? ", then back to T" + mmu().tool : ""), "warn");
+    return run(cmd, "Selector homed");
   }
 
   /**
@@ -241,7 +242,6 @@ export function makeMmuActions({ api, store, log } = {}) {
       store.setCutter(null);                                    // blade hidden/stopped
       if (store.signalMotion) store.signalMotion("storing", -1, 800, 0);   // retract home
     }
-    return ok;
     return ok;
   }
 
@@ -351,29 +351,29 @@ export function makeMmuActions({ api, store, log } = {}) {
   }
   // ---------------------------------------------------------------- gate map / spool assignment
   //
-  // Spoolman is the SOURCE OF TRUTH for what filament is on a spool and which gate it sits in. This printer
-  // runs `spoolman_support: push`, so the split of responsibility is:
+  // Spoolman is the SOURCE OF TRUTH for what filament is on a spool and which gate it sits in. The split of
+  // responsibility (this printer runs `spoolman_support: push`):
   //
-  //   assignSpool()   the gate -> spool mapping. Goes through Spoolman via `MMU_SPOOLMAN GATE=n SPOOLID=x`,
-  //                   which calls _spoolman_set_spool_gate() and writes the association into the Spoolman DB.
+  //   assignSpool()   the gate -> spool mapping. Which command carries it depends on spoolman_support — see
+  //                   assignSpool() below: MMU_SPOOLMAN only in `pull`, the local MMU_GATE_MAP SPOOLID otherwise.
   //                   Filament name / material / colour / temperature then flow back FROM Spoolman; they are
   //                   never typed in here, which is why there is no name/material/temp setter below.
-  //                   HH's SPOOLID has minval=1, so a gate is CLEARED by omitting SPOOLID entirely
-  //                   (-> _spoolman_unset_spool_gate), not by sending 0 or -1.
   //
   //   setGateLocal()  the two attributes Spoolman does not own. HH's own source says it: "gate_speed_override
-  //                   and gate_status can be set locally". Sent with `MMU_GATE_MAP GATE=n AVAILABLE=.. SPEED=..`.
+  //                   and gate_status can be set locally". Sent as `MMU_GATE_MAP GATE=n` plus only the one
+  //                   being changed (AVAILABLE= or SPEED=) and TEMP.
   //
   // Why not `MMU_GATE_MAP MAP={...}`: that bulk path is DESTRUCTIVE for omitted fields — spool_id defaults to
   // -1, name/material/colour to '', temp to default_extruder_temp — so it can only be used by something that
   // already holds every value. The single-gate form is preserving instead (`name if name is not None else
-  // self.gate_filament_name[gate]`), which is what a UI wants.
+  // self.gate_filament_name[gate]`; AVAILABLE and SPEED default to the gate's current value), which is what a
+  // UI wants.
   //
-  // TEMP is passed on EVERY setGateLocal call and that is deliberate, not redundant:
+  // TEMP is the exception, and it is passed on EVERY local write — deliberate, not redundant:
   //     temperature = gcmd.get_int('TEMP', int(self.default_extruder_temp))   # omitted -> 200
   //     temperature = temperature or self.gate_temperature[gate]              # 200 is truthy, so it STICKS
-  // Omitting TEMP silently rewrites the gate to default_extruder_temp. On this machine gates 2 and 7 run at
-  // 250 C, so an omitted TEMP would quietly drop them to 200.
+  // Omitting TEMP silently rewrites the gate to default_extruder_temp. On this machine gates 2 to 5 and 7 run
+  // at 250 C, so an omitted TEMP would quietly drop them to 200. keepTemp() is the value resent.
 
   /** Live attributes of one gate, as the dialog shows them before any edit (all read-only except the last two). */
   function gateAttrs(g) {
@@ -391,11 +391,61 @@ export function makeMmuActions({ api, store, log } = {}) {
     };
   }
 
-  /** Happy Hare's spoolman_support mode: off | readonly | push | pull (or null when config is unread). */
+  /**
+   * [mmu] from configfile.settings. boot.js stores that on state.config — it subscribes configfile only for
+   * save_config_pending, so raw.configfile.settings is empty in every Carbon bundle. It is still read first for
+   * a caller that does subscribe it. Reading ONLY raw.configfile.settings was the bug that made spoolmanMode()
+   * and tempFloor() return null everywhere.
+   */
+  const cfgMmu = () => ((((raw().configfile || {}).settings || state().config || {}).mmu) || {});
+
+  /**
+   * Happy Hare's spoolman_support mode: off | readonly | push | pull, or null while nothing has reported it.
+   * HH's own status carries it (get_status 'spoolman_support'; live here: "push"), and that value wins over the
+   * config file: MMU_TEST_CONFIG SPOOLMAN_SUPPORT=... changes it at runtime without touching [mmu].
+   */
   function spoolmanMode() {
-    const st = (raw().configfile || {}).settings || {};
-    const v = (st.mmu || {}).spoolman_support;
-    return v === undefined || v === null ? null : String(v).toLowerCase();
+    const v = [mmu().spoolman_support, cfgMmu().spoolman_support].find(x => x !== undefined && x !== null && x !== "");
+    return v === undefined ? null : String(v).toLowerCase();
+  }
+
+  /**
+   * [mmu] default_extruder_temp as Happy Hare uses it, or null while the config is unread. Truncated, because
+   * that is what an omitted TEMP becomes: cmd_MMU_GATE_MAP does get_int('TEMP', int(self.default_extruder_temp)).
+   * It is also the floor the bulk MAP path clamps a Spoolman temperature to (max(temp, default_extruder_temp)).
+   */
+  function tempFloor() {
+    const v = Number(cfgMmu().default_extruder_temp);
+    return Number.isFinite(v) && v > 0 ? Math.trunc(v) : null;
+  }
+
+  /**
+   * The TEMP a local gate-map write resends so gate g keeps its temperature: its own, or default_extruder_temp
+   * for a gate that has none. For that second case sending it changes nothing in HH (an omitted TEMP becomes the
+   * same number); it only makes the command say what HH will do. 0 = nothing known, TEMP left out.
+   */
+  function keepTemp(g) {
+    const t = gateAttrs(g).temp;
+    return t > 0 ? t : (tempFloor() || 0);
+  }
+
+  /**
+   * The exact script assignSpool(gate, spoolId) sends, built from live state at call time exactly as
+   * assignSpool builds it, so a confirm can show the real command before it is sent. null when the gate is out
+   * of range or spoolId is not a Spoolman id. spoolId null / undefined / "" = clear the gate.
+   */
+  function spoolScript(gate, spoolId) {
+    const g = gateIndex(gate);
+    if (g === null) return null;
+    const pull = spoolmanMode() === "pull";
+    const t = keepTemp(g);
+    const tempArg = t > 0 ? " TEMP=" + t : "";
+    if (spoolId === null || spoolId === undefined || spoolId === "") {
+      return pull ? "MMU_SPOOLMAN GATE=" + g : "MMU_GATE_MAP GATE=" + g + " SPOOLID=-1" + tempArg;
+    }
+    const id = Math.round(Number(spoolId));
+    if (!Number.isFinite(id) || id < 1) return null;
+    return pull ? "MMU_SPOOLMAN GATE=" + g + " SPOOLID=" + id : "MMU_GATE_MAP GATE=" + g + " SPOOLID=" + id + tempArg;
   }
 
   /**
@@ -404,7 +454,8 @@ export function makeMmuActions({ api, store, log } = {}) {
    * WHICH COMMAND depends on spoolman_support, and getting this wrong is silent:
    *
    *   pull  — Spoolman owns the gate map. `MMU_SPOOLMAN GATE=n SPOOLID=x` writes the remote record and
-   *           HH follows it (_spoolman_set_spool_gate is called with sync=True in this mode).
+   *           HH follows it (_spoolman_set_spool_gate is called with sync=True in this mode). A gate is
+   *           cleared with `MMU_SPOOLMAN GATE=n` (MMU_SPOOLMAN's SPOOLID has minval=1).
    *
    *   push / readonly / off — HH owns the gate map and pushes it OUT to Spoolman. Here the write must go
    *           to the LOCAL map via `MMU_GATE_MAP GATE=n SPOOLID=x`. Using MMU_SPOOLMAN in push mode looks
@@ -415,8 +466,11 @@ export function makeMmuActions({ api, store, log } = {}) {
    * Identity still comes from Spoolman either way: changing SPOOLID makes HH fetch that spool's record and
    * overwrite the gate's name / material / colour / temperature from it — measured, it replaced a passed
    * TEMP=200 with the spool's own 250 C. So nothing here types filament attributes in by hand.
+   * A spool with no settings_extruder_temp brings default_extruder_temp, not the TEMP sent: v3.4.2's mmu_server
+   * (_get_filament_attr) sends temp '' for it, safe_int('') is 0, and the MAP update keeps max(temp,
+   * default_extruder_temp). Push mode re-sends every mapped gate this way at each Klipper start (_spoolman_sync).
    *
-   * TEMP is passed because omitting it rewrites the gate to default_extruder_temp; see setGateLocal.
+   * TEMP is passed because omitting it rewrites the gate to default_extruder_temp; see keepTemp.
    * Clearing uses SPOOLID=-1 (GATE_MAP accepts minval=-1; note SPOOLID=0 would fall through to the
    * existing value because HH does `spool_id or self.gate_spool_id[gate]`).
    */
@@ -426,36 +480,51 @@ export function makeMmuActions({ api, store, log } = {}) {
     if (g === null) { say("Refused — gate " + gate + " is out of range", "warn"); return false; }
     if (busy("Spool assignment")) return false;
 
+    const script = spoolScript(g, spoolId);
+    if (!script) { say("Refused — '" + spoolId + "' is not a Spoolman spool id (must be >= 1)", "warn"); return false; }
     const pull = spoolmanMode() === "pull";
-    const cur = gateAttrs(g);
-    const temp = cur.temp > 0 ? cur.temp : (tempFloor() || 0);
-    const tempArg = temp > 0 ? " TEMP=" + temp : "";
 
     if (spoolId === null || spoolId === undefined || spoolId === "") {
-      if (pull) {
-        say("MMU_SPOOLMAN GATE=" + g + " — clearing the spool assignment in Spoolman", "warn");
-        return run("MMU_SPOOLMAN GATE=" + g, "Gate " + g + " spool cleared");
-      }
-      say("MMU_GATE_MAP GATE=" + g + " SPOOLID=-1 — clearing the spool on gate " + g, "warn");
-      return run("MMU_GATE_MAP GATE=" + g + " SPOOLID=-1" + tempArg, "Gate " + g + " spool cleared");
+      say(script + " — " + (pull ? "clearing the spool assignment in Spoolman" : "clearing the spool on gate " + g), "warn");
+      return run(script, "Gate " + g + " spool cleared");
     }
-
     const id = Math.round(Number(spoolId));
-    if (!Number.isFinite(id) || id < 1) { say("Refused — '" + spoolId + "' is not a Spoolman spool id (must be >= 1)", "warn"); return false; }
     const sp = (state().spools || {})[id];
     const label = (sp && sp.filament && (sp.filament.name || sp.filament.material)) || ("spool #" + id);
+    say(script + " — assigning " + label + (pull ? " in Spoolman" : " (attributes follow from Spoolman)"));
+    return run(script, "Gate " + g + " -> spool #" + id);
+  }
 
-    if (pull) {
-      say("MMU_SPOOLMAN GATE=" + g + " SPOOLID=" + id + " — assigning " + label + " in Spoolman");
-      return run("MMU_SPOOLMAN GATE=" + g + " SPOOLID=" + id, "Gate " + g + " -> spool #" + id);
-    }
-    say("MMU_GATE_MAP GATE=" + g + " SPOOLID=" + id + " — assigning " + label + " (attributes follow from Spoolman)");
-    return run("MMU_GATE_MAP GATE=" + g + " SPOOLID=" + id + tempArg, "Gate " + g + " -> spool #" + id);
+  // HH's SPEED is get_int(..., minval=10, maxval=150): outside that it ERRORS, so it is clamped here instead.
+  const clampSpeed = v => Math.min(150, Math.max(10, v));
+  /** AVAILABLE for a patch's status: true/false as the web editor's toggle sends it, or HH's own -1..2. */
+  const availArg = s => (Number.isInteger(s) && s >= -1 && s <= 2 ? s : s ? 1 : 0);
+
+  /**
+   * The exact script setGateLocal(gate, patch) sends; null when the gate is out of range or the patch carries
+   * nothing to change. Only what the patch carries goes out, plus TEMP. cmd_MMU_GATE_MAP defaults AVAILABLE and
+   * SPEED to the gate's CURRENT value (get_int('AVAILABLE', self.gate_status[gate]), get_int('SPEED',
+   * self.gate_speed_override[gate])), so leaving them out keeps them. Resending the value read at render time was
+   * not harmless: an availability HH changed in between (a gate check, a runout, an unload to the buffer turning
+   * 1 into 2) was written back over by a load-speed edit. TEMP's default is NOT the current value — keepTemp().
+   */
+  function gateLocalScript(gate, patch) {
+    const g = gateIndex(gate);
+    if (g === null) return null;
+    const p = patch || {};
+    const parts = ["MMU_GATE_MAP GATE=" + g];
+    if (p.status !== undefined) parts.push("AVAILABLE=" + availArg(p.status));
+    const speed = p.speed_override === undefined ? NaN : Math.round(Number(p.speed_override));
+    if (Number.isFinite(speed)) parts.push("SPEED=" + clampSpeed(speed));
+    if (parts.length === 1) return null;
+    const t = keepTemp(g);
+    if (t > 0) parts.push("TEMP=" + t);
+    return parts.join(" ");
   }
 
   /**
    * The two gate attributes Spoolman does not own: availability and the load speed override.
-   * `patch` may carry { status, speed_override }. TEMP is always resent — see the note above.
+   * `patch` may carry { status, speed_override }; only those are sent, with TEMP — see gateLocalScript.
    */
   async function setGateLocal(gate, patch) {
     if (blocked()) return false;
@@ -463,31 +532,21 @@ export function makeMmuActions({ api, store, log } = {}) {
     if (g === null) { say("Refused — gate " + gate + " is out of range", "warn"); return false; }
     if (busy("Gate update")) return false;
 
-    const cur = gateAttrs(g);
     const p = patch || {};
-    const status = (p.status === undefined ? cur.status : (p.status ? 1 : 0));
-    let speed = Math.round(Number(p.speed_override === undefined ? cur.speed_override : p.speed_override));
-    if (!Number.isFinite(speed)) speed = cur.speed_override;
-    // HH clamps SPEED to 10..150 and ERRORS outside it, so clamp here and say so rather than fail the command.
-    if (speed < 10 || speed > 150) {
-      const c = Math.min(150, Math.max(10, speed));
-      say("Load speed override " + speed + "% is outside Happy Hare's 10-150% range — using " + c + "%", "warn");
-      speed = c;
+    const script = gateLocalScript(g, p);
+    if (!script) { say("Gate " + g + " — nothing to change", "warn"); return false; }
+    const what = [];
+    if (p.status !== undefined) {
+      const s = gateState(availArg(p.status));
+      what.push("marked " + (s ? s.label.toLowerCase() : String(availArg(p.status))));
     }
-    // TEMP must be > 0 or HH's `temperature or existing` falls through; a gate with no temperature yet gets
-    // default_extruder_temp, which is what HH would have used anyway.
-    const temp = cur.temp > 0 ? cur.temp : (tempFloor() || 0);
-    const parts = ["MMU_GATE_MAP GATE=" + g, "AVAILABLE=" + status, "SPEED=" + speed];
-    if (temp > 0) parts.push("TEMP=" + temp);
-    say("MMU_GATE_MAP GATE=" + g + " — " + (status ? "available" : "marked empty") + ", load speed " + speed + "%");
-    return run(parts.join(" "), "Gate " + g + " updated");
-  }
-
-  /** The floor HH clamps gate temperatures to (mmu.default_extruder_temp), or null when config is not loaded. */
-  function tempFloor() {
-    const st = (raw().configfile || {}).settings || {};
-    const v = ((st.mmu || {}).default_extruder_temp);
-    return typeof v === "number" ? Math.round(v) : null;
+    const speed = p.speed_override === undefined ? NaN : Math.round(Number(p.speed_override));
+    if (Number.isFinite(speed)) {
+      if (speed !== clampSpeed(speed)) say("Load speed override " + speed + "% is outside Happy Hare's 10-150% range — using " + clampSpeed(speed) + "%", "warn");
+      what.push("load speed " + clampSpeed(speed) + "%");
+    }
+    say(script + " — " + what.join(", "));
+    return run(script, "Gate " + g + " updated");
   }
 
   /** Ask HH to rebuild its Spoolman cache and reconcile local/remote gate maps. */
@@ -515,6 +574,7 @@ export function makeMmuActions({ api, store, log } = {}) {
     mmuLoad, mmuUnload, mmuEject, mmuPreload, mmuRecover, mmuReset, cutFilament, formTip, mmuHome,
     servoPos, mmuStats, mmuSettings, editGateMap, setEndless,
     assignSpool, setGateLocal, refreshSpoolman, gateAttrs, tempFloor,
+    spoolmanMode, keepTemp, spoolScript, gateLocalScript,
     mmuAction, mmuMenuAction,
     // design-name aliases
     loadSelector: mmuLoad, mmuServo: servoPos,

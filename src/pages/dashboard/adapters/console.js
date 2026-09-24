@@ -12,6 +12,12 @@
 // with `//`; commands plain; 'ok' for lines containing complete|success|ready; time HH:MM from `time`; the `// ` / `!! `
 // markers and HTML tags (Happy Hare wraps its output in <span>/<b>) are stripped. The panel scrolls: 300 lines are
 // rendered into a 12-row (collapsed) or 1100 px (expanded) box, both overflow-y:auto.
+//
+// Also the line vocabulary of the other two consoles, so there is one set of rules and not three:
+//   toTerminalRow(entry)  the full-height /console page's row (src/pages/console): multi-line, spacing kept, HH:MM:SS
+//   isChatter(text)       what that page's HIDE NOISE toggle and the touchscreen's QUIET view
+//                         (src/screen/screens/console.jsx) leave out
+//   loadHistory/pushHistory  the ↑/↓ history all three share (`carbon.console.history`)
 
 // ---- design constants (verbatim) -------------------------------------------------------------------------------
 export const KIND_COLOR = { ok: "#3ddcc4", warn: "#f0b429", err: "#ff5a33" };
@@ -39,7 +45,9 @@ const OK_RE = /complete|success|ready/i;
 const NOT_OK_RE = /not ready|isn'?t ready|is not ready|fail|error|abort|cancel|unable|cannot|can'?t|timed? ?out|incomplete|unsuccess/i;
 const WARN_RE = /\bwarn(ing)?\b/i;
 // M105 answers / temperature auto-reports ("ok B:60.0 /60.0 T0:245.1 /245.0 …", "B:59.9 /60.0") — pure noise in a 12-line panel.
-const TEMP_NOISE_RE = /^(ok\s+)?(B|C|T\d*):\s*-?\d+(\.\d+)?\s*\/\s*-?\d+/i;
+// The bare "T:0" is an M105 answer too: klippy/extras/heaters.py registers M105 when_not_ready and _get_temp
+// returns "T:0" until klippy:ready, so a poller gets it through every restart — the one report with no "/target".
+const TEMP_NOISE_RE = /^(ok\s+)?(?:(B|C|T\d*):\s*-?\d+(\.\d+)?\s*\/\s*-?\d+|T:0\s*$)/i;
 const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
 
 /** Strip HTML tags (Happy Hare emits <span style=…>/<b>) and decode the common entities. */
@@ -59,25 +67,39 @@ export function stripHtml(s) {
 }
 
 /**
+ * One PHYSICAL line of a message: its `// ` / `!! ` marker, a Klipper `echo:` prefix and the HTML go. Spacing is
+ * left alone — collapsing it is the one-row panel's choice, and the /console page needs the tables aligned.
+ */
+/** One physical response line, cleaned: the // or !! marker, `echo:` and HTML removed. Shared with the touchscreen. */
+export function cleanPhysical(l) {
+  return stripHtml(l.replace(/^\s*(\/\/|!!)\s?/, "").replace(/^echo:\s?/i, ""));
+}
+
+/**
  * Klipper/Moonraker message → one clean display line. Every physical line of a multi-line response (MMU_STATUS tables,
  * the Happy Hare banner) carries its own `// ` marker: strip the marker, `echo:` noise and HTML per line, collapse
  * whitespace, then join the lines with the design's " · " separator so the entry stays a single ellipsised row.
  */
 export function cleanMessage(raw) {
   const parts = String(raw == null ? "" : raw).split(/\r?\n/).map(l =>
-    stripHtml(l.replace(/^\s*(\/\/|!!)\s?/, "").replace(/^echo:\s*/i, "")).replace(/\s+/g, " ").trim()
+    cleanPhysical(l).replace(/\s+/g, " ").trim()
   ).filter(Boolean);
   return parts.join(" · ");
 }
 
-/** Epoch seconds (or ms) → local HH:MM (zero-padded so the time column stays aligned in the mono grid). */
-export function fmtLogTime(t) {
+/**
+ * Epoch seconds (or ms) → local HH:MM, zero-padded so the time column stays aligned in the mono grid. `seconds`
+ * gives HH:MM:SS: the dashboard column is HH:MM to save width, the full-height /console page can afford seconds.
+ */
+export function fmtLogTime(t, seconds = false) {
+  const none = seconds ? "--:--:--" : "--:--";
   let n = Number(t);
-  if (!Number.isFinite(n) || n <= 0) return "--:--";
+  if (!Number.isFinite(n) || n <= 0) return none;
   if (n > 1e12) n = n / 1000; // tolerate ms timestamps
   const d = new Date(n * 1000);
-  if (Number.isNaN(d.getTime())) return "--:--";
-  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  if (Number.isNaN(d.getTime())) return none;
+  const p = x => String(x).padStart(2, "0");
+  return p(d.getHours()) + ":" + p(d.getMinutes()) + (seconds ? ":" + p(d.getSeconds()) : "");
 }
 
 /**
@@ -130,6 +152,56 @@ export function toLine(entry) {
   return { t: fmtLogTime(entry.time), m, kind };
 }
 
+/**
+ * One store entry → { t (HH:MM:SS), text, kind } for the full-height /console page, or null when there is nothing
+ * to show. Cleaning is toLine's, per physical line, but whitespace is deliberately NOT collapsed and the lines are
+ * NOT joined: MMU_STATUS and the gate map are space-aligned tables and only survive in a pre-wrap mono column.
+ * kind is classify()'s plus 'command' and 'echo' (a Klipper `echo:` line, shown muted). Temperature reports are
+ * kept — the page hides them with isChatter behind its toggle instead.
+ */
+export function toTerminalRow(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  const raw = String(entry.message == null ? "" : entry.message);
+  const type = String(entry.type || "").toLowerCase();
+  const text = raw.split(/\r?\n/).map(l => cleanPhysical(l).replace(/\s+$/, ""))
+    .join("\n").replace(/^\n+|\n+$/g, "");
+  if (!text.trim()) return null;
+  const kind = type === "command" ? "command" : /^\s*echo:/i.test(raw) ? "echo" : classify(entry, text);
+  return { t: fmtLogTime(entry.time, true), text, kind };
+}
+
+// ---- chatter -----------------------------------------------------------------------------------------------------
+// What the /console page's HIDE NOISE toggle and the touchscreen's QUIET view leave out. Measured on 1000
+// consecutive gcode_store entries from this printer while it printed: 231 `// MmuSyncFeedbackManager: …` ·
+// 124 gear-current lines that follow it · 59 M105 answers (`B:105.1 /105.0 T0:251.2 /250.0`) · 43 `// probe at …`
+// — 46% of everything Klipper said. Everything else Happy Hare says stays: "Checking gate 5...", "Gate 5 marked
+// EMPTY", "Tool T5 enabled" are `//` responses too, and they are the answer to the command that was just sent.
+// The temperature alternative is TEMP_NOISE_RE itself (every "<id>:<cur> /<target>" report plus the pre-ready
+// "T:0"), so the dashboard panel and the toggle agree on what a temperature report is.
+const CHATTER_RE = new RegExp([
+  TEMP_NOISE_RE.source,                                          // M105 answer / temperature report
+  "^MmuSyncFeedbackManager:",                                     // Happy Hare sync-feedback chatter
+  // …and the run-current changes it makes: the gear ("MMU stepper_mmu_gear", "stepper_mmu_gear_3" on a
+  // multigear unit) and the extruder stepper when syncing
+  "^(?:Modifying|Restoring) (?:MMU )?(?:extruder )?stepper\\w* run current",
+  "^Run Current:",
+  "^probe at ",                                                   // QGL + bed mesh probe reports
+  // QUAD_GANTRY_LEVEL's per-pass summary (3 passes on every home here, 5 multi-line blocks each), matched on the
+  // first line of each block as it arrives. Verified against this printer's gcode_store.
+  "^Gantry-relative probe points:",
+  "^Actuator Positions:",
+  "^Average: -?\\d",
+  "^Making the following Z adjustments:",
+  "^Retries: \\d+/\\d+ Probed points range",
+  "^pressure_advance:",
+].join("|"), "i");
+
+/**
+ * True for routine chatter, tested on CLEANED text (toLine's `m` or toTerminalRow's `text`: markers and HTML gone).
+ * Callers keep commands and errors visible whatever they look like; this only reads the words.
+ */
+export function isChatter(text) { return CHATTER_RE.test(String(text == null ? "" : text)); }
+
 /** Newest-first display lines from st.log: skips noise, stops after `limit` lines (or SCAN_MAX entries). */
 export function collectLines(log, limit) {
   const out = [];
@@ -143,10 +215,7 @@ export function collectLines(log, limit) {
   return out;
 }
 
-function nowClock() {
-  const d = new Date();
-  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") + ":" + String(d.getSeconds()).padStart(2, "0");
-}
+function nowClock() { return fmtLogTime(Date.now() / 1000, true); }
 
 // ---- ↑/↓ command recall -----------------------------------------------------------------------------------------
 // Shared with the full /console page through localStorage `carbon.console.history`: a JSON array of strings in

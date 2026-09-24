@@ -715,10 +715,13 @@ export function mmuVals(ctx) {
     recoverMenuStyle: ui.recoverMenuOpen
       ? "position:absolute; left:0; bottom:30px; z-index:40; min-width:184px; padding:4px; border:1px solid #1c2430; border-radius:5px; background:#0d121a; box-shadow:0 10px 24px rgba(0,0,0,.65); display:flex; flex-direction:column; gap:1px; animation:vRise .14s ease both"
       : "display:none",
+    // Only the first entry DETECTS anything. LOADED=1 / LOADED=0 overwrite Happy Hare's state with no check at
+    // all, and the labels used to read like statuses ("Filament LOADED"), so they said so wrongly. LOADED=1 also
+    // locks the gate checks out (they refuse while filament is loaded) until something unloads.
     recoverOptions: [
-      ["From sensors", null, "MMU_RECOVER — let Happy Hare work it out"],
-      ["Filament LOADED", 1, "MMU_RECOVER LOADED=1 — assert filament is at the nozzle"],
-      ["Filament UNLOADED", 0, "MMU_RECOVER LOADED=0 — assert filament is back at the gate"]
+      ["DETECT \u00b7 from sensors", null, "MMU_RECOVER — Happy Hare re-reads its sensors and works the position out itself"],
+      ["SET \u00b7 loaded at nozzle", 1, "MMU_RECOVER LOADED=1 — OVERRIDES Happy Hare's state, nothing is checked. Only when you can see filament at the nozzle. Gate checks are refused until it is unloaded."],
+      ["SET \u00b7 unloaded at gate", 0, "MMU_RECOVER LOADED=0 — OVERRIDES Happy Hare's state, nothing is checked. Use when the filament is back at the gate."]
     ].map(row => ({
       t: row[0], title: row[2],
       go: () => { set({ recoverMenuOpen: false }); call("mmuRecover", row[1]); },

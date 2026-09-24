@@ -12,6 +12,7 @@ import { Panel, Btn, Chip, Label, Val, Row, Input, Table, Confirm, T, mono, fmtD
 import { S, Hv } from "../../lib/ui.js";
 import { useStore, useAsync, usePersisted } from "../../lib/useStore.js";
 import { makeFilesActions, joinPath, dirOf, baseOf, stripRoot, keepExtension, validName, isGcode } from "../../lib/actions/files.js";
+import { listOf, usedTools } from "../../lib/history.js";
 
 const BIG = 50 * 1024 * 1024, HUGE = 200 * 1024 * 1024;
 const SORTS = [["name", "NAME"], ["size", "SIZE"], ["modified", "MODIFIED"], ["est", "EST"]];
@@ -33,32 +34,17 @@ function thumbUrl(api, dir, f, want) {
   return api.fileUrl("gcodes", joinPath(dir, best.relative_path));
 }
 
-/**
- * Per-extruder slicer metadata arrives in TWO shapes on this printer: the ';'-joined form
- * ("ABS;ABS;PLA;…", 115 files) and a JSON array string ('["ABS", "ABS", …]', 54 files) — Orca writes
- * whichever its post-processor produced. Reading only the ';' form left the material blank on every
- * tool of a quarter of the library, and would have printed the whole '["ABS", …]' blob as the
- * material for tool 0.
- */
-function listOf(v) {
-  if (Array.isArray(v)) return v;
-  const s = String(v == null ? "" : v).trim();
-  if (!s) return [];
-  if (s.startsWith("[")) {
-    try { const a = JSON.parse(s); if (Array.isArray(a)) return a; } catch (e) { /* not JSON after all — fall through */ }
-  }
-  return s.split(";");
-}
+// Per-extruder slicer metadata arrives in TWO shapes on this printer: the ';'-joined form ("ABS;ABS;PLA;…",
+// 115 files) and a JSON array string ('["ABS", "ABS", …]', 54 files). listOf (lib/history.js) reads both;
+// reading only the ';' form left the material blank on every tool of a quarter of the library.
 const cell = (list, i) => String(list[i] == null ? "" : list[i]).trim().replace(/^"+|"+$/g, "");
 
-/** One tool the file actually uses: gate/tool index, its slicer colour, material and weight. */
+/** One chip per tool the file uses (usedTools: referenced_tools as integers): its slicer colour, material and weight. */
 function toolChips(f) {
-  const tools = f && Array.isArray(f.referenced_tools) ? f.referenced_tools : [];
   const colors = listOf(f && f.filament_colors);
   const weights = listOf(f && f.filament_weights);
   const mats = listOf(f && f.filament_type);
-  return tools.map(t => {
-    const i = typeof t === "number" ? t : parseInt(t, 10);
+  return usedTools(f).map(i => {
     // Orca writes colours as #RRGGBB or #RRGGBBAA, and the alpha byte is usually 00 — which CSS reads
     // as fully transparent, i.e. an invisible swatch. Cut it back to the RGB triplet.
     const hex = cell(colors, i);
@@ -69,7 +55,7 @@ function toolChips(f) {
       material: cell(mats, i),
       grams: num(typeof w === "number" ? w : parseFloat(w)),
     };
-  }).filter(c => Number.isFinite(c.t));
+  });
 }
 
 /** Thumbnail with its own failed/missing state (a listed thumb can 404 after a re-upload). */

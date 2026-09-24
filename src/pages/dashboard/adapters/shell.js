@@ -1,5 +1,8 @@
 // Shell view-model: nav rail, layout keys, and the footer/top-bar values that were static text in the design.
 // Style strings are the design's, verbatim; only the data source changed.
+import { FINISHED_STATES } from "./job.js";
+import { fmtUptime } from "../../../lib/actions/machine.js";
+import { generalPrefs } from "../../../lib/prefs.js";
 import { ROUTES, labelFor } from "../../../lib/router.js";
 import { mb, printGate } from "../../../lib/actions/upload.js";
 
@@ -14,13 +17,8 @@ export function shortVersion(v) {
 }
 
 /** seconds -> "6d 04h" / "4h 07m" / "12m" */
-export function fmtUptime(s) {
-  if (!Number.isFinite(s) || s < 0) return DASH;
-  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
-  if (d) return `${d}d ${String(h).padStart(2, "0")}h`;
-  if (h) return `${h}h ${String(m).padStart(2, "0")}m`;
-  return `${m}m`;
-}
+// fmtUptime lives in lib/actions/machine.js (identical rule; "—" when unknown). Re-exported for callers of this module.
+export { fmtUptime };
 
 export function shellVals(ctx) {
   const st = (ctx && ctx.st) || {};
@@ -44,7 +42,10 @@ export function shellVals(ctx) {
   const mem = ps.system_memory && ps.system_memory.total
     ? (ps.system_memory.used / ps.system_memory.total) * 100 : null;
   const host = (st.printerInfo && st.printerInfo.hostname) || "";
-  const file = ((st.raw && st.raw.print_stats && st.raw.print_stats.filename) || "").replace(/^.*\//, "");
+  // A finished job clears from the top bar along with its status (see FINISHED_STATES in job.js): print_stats keeps
+  // the filename until SDCARD_RESET_FILE, and the outcome now lives on the LATEST PRINTS card instead.
+  const psTop = (st.raw && st.raw.print_stats) || {};
+  const file = FINISHED_STATES.indexOf(String(psTop.state || "").toLowerCase()) >= 0 ? "" : String(psTop.filename || "").replace(/^.*\//, "");
 
   // ---- UPLOAD & PRINT (top bar) + drop-anywhere overlay. The state is UI-local (ui.upload / ui.drop, fed by
   //      logic.jsx); the print gate itself is decided in actions/upload.js — these keys only SHOW that decision,
@@ -115,11 +116,14 @@ export function shellVals(ctx) {
 
   return {
     navItems,
-    mainStyle: "flex:1; display:flex; flex-direction:column; min-width:" + (ui.narrow ? "980px" : "1340px"),
+    mainStyle: "flex:1; display:flex; flex-direction:column; min-width:" + (ui.narrow ? "980px" : "1495px"),
     narrow: !!ui.narrow,
     wide: !ui.narrow,
+    // The right rail is the webcam's column: 595px = 1.75x the design's 340px, so the 4:3 stream is
+    // legible at a glance. 300 + 560 + 595 + gaps + padding = 1495, which is mainStyle's wide min-width
+    // and why logic.jsx only switches to three columns at 1700px (1495 + the 196px nav rail).
     dashGridStyle: "flex:1; display:grid; gap:10px; padding:10px; align-content:start; grid-template-columns:" +
-      (ui.narrow ? "300px minmax(560px,1fr)" : "300px minmax(560px,1fr) 340px"),
+      (ui.narrow ? "300px minmax(560px,1fr)" : "300px minmax(560px,1fr) 595px"),
     isDash: path === "/",
     isStub: path !== "/",
     activeLabel: labelFor(path),
@@ -134,6 +138,11 @@ export function shellVals(ctx) {
     hostMem: mem === null ? DASH : Math.round(mem) + " %",
     hostname: host ? host + ".local" : (typeof location !== "undefined" && location.hostname) || "printer",
     topFile: file || DASH,
+    printerName: generalPrefs(st).printerName,
+    // Panel headers whose kebab became an open-full-page arrow (patch_template.py "open full page").
+    openPageGlyph: "\u2197",
+    openConsolePage: () => nav("/console"),
+    openHeightmapPage: () => nav("/heightmap"),          // sidebar header (design literal "VORON 2.4"); set in SETTINGS
 
     // --- top bar alerts button (design literal: a permanent "9+") ---
     alertCount: alertN > 9 ? "9+" : String(alertN),

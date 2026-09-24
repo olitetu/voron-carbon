@@ -23,6 +23,10 @@ import { Panel, Btn, Chip, Label, Val, Row, Input, Table, Confirm, T, mono, fmtD
 import { S } from "../../lib/ui.js";
 import { useStore, useAsync, usePersisted } from "../../lib/useStore.js";
 import { makeHistoryActions } from "../../lib/actions/history.js";
+import {
+  FIL_NOTE, fmtSpan, fmtLen, fmtMass, fmtStamp, jobMass, jobMassNote, jobMaterials, numish, statusColor, statusText, isDone, isRunning,
+  STATUS_TABS, statusGroup, normalize, thumbUrl,
+} from "../../lib/history.js";
 
 const PAGE = 50;          // rows per fetch — one page of the table, ~95 KB with metadata on this printer
 const ALL_LIMIT = 5000;   // LOAD ALL is still bounded: a runaway database must not be pulled in one request
@@ -30,128 +34,23 @@ const CHART_LIMIT = 400;  // the 14-day query is tiny here (9 jobs), but bound i
 const CHART_DAYS = 14;
 const DAY = 86400;
 const DASH = "—";
-// 1.75 mm filament at PLA density — the only way to turn Moonraker's millimetres into a mass. The tile prints the
-// assumption in its tooltip instead of pretending it was weighed.
-const MM3_PER_MM = Math.PI * Math.pow(1.75 / 2, 2);
-const G_PER_MM3 = 0.00124;
-const FIL_NOTE = "Mass is estimated from length: 1.75 mm filament at PLA density (1.24 g/cm³)";
 
 // Nothing to fetch yet (the websocket is still connecting): a promise that never settles keeps useAsync in its
 // loading state, so the table says "LOADING HISTORY…" instead of flashing "not connected" on every cold boot.
 const PENDING = new Promise(() => {});
 
 const num = v => (typeof v === "number" && isFinite(v) ? v : null);
-const numish = v => num(typeof v === "string" && v.trim() !== "" ? +v : v);   // metadata fields can arrive as strings
-const baseName = f => String(f || "").split("/").pop();
 const errText = e => (e && e.message ? e.message : String(e || "error"));
 
 // ---- formatting -------------------------------------------------------------------------------------
-/** Long spans read as "46d 2h" — fmtDur's h:mm:ss becomes unreadable ("1104:12:07") at lifetime scale. */
-function fmtSpan(sec) {
-  const t = num(sec);
-  if (t === null || t < 0) return DASH;
-  const d = Math.floor(t / DAY), h = Math.floor((t % DAY) / 3600), m = Math.floor((t % 3600) / 60);
-  return d ? d + "d " + h + "h" : h ? h + "h " + String(m).padStart(2, "0") + "m" : m + "m";
-}
-function fmtLen(mm) {
-  const v = num(mm);
-  if (v === null) return DASH;
-  const m = v / 1000;
-  return m >= 1000 ? (m / 1000).toFixed(2) + " km" : m >= 10 ? m.toFixed(1) + " m" : m.toFixed(2) + " m";
-}
-function fmtMass(mm) {
-  const v = num(mm);
-  if (v === null) return DASH;
-  const g = v * MM3_PER_MM * G_PER_MM3;
-  return g >= 1000 ? (g / 1000).toFixed(2) + " kg" : Math.round(g) + " g";
-}
-/** fmtDate has no year; a job from 2024 must not read like one from last week. */
-function fmtStamp(t) {
-  const d = new Date(t * 1000);
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit" }) + " " +
-    d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-}
 const fmtMm = v => (num(v) === null ? DASH : num(v).toFixed(2) + " mm");
-/**
- * Slicer material fields are per-extruder, and this printer's history holds two shapes: Orca 2.x writes a
- * JSON array STRING (`["ABS", "ABS", "PLA", …]`), older exports a quote-semicolon list (`ABS";"PC`). Printed
- * raw, eight MMU gates fill the cell with `["ABS", "ABS", "P…` — so parse both and keep the distinct ones.
- */
-function fmtMaterials(v) {
-  if (v === null || v === undefined) return null;
-  let parts = v;
-  if (!Array.isArray(parts)) {
-    const s = String(parts).trim();
-    if (!s) return null;
-    if (s.startsWith("[")) { try { parts = JSON.parse(s); } catch (e) { parts = [s]; } }
-    else parts = s.split(";");
-  }
-  const seen = [];
-  for (const p of Array.isArray(parts) ? parts : [parts]) {
-    const t = String(p === null || p === undefined ? "" : p).trim().replace(/^["']+|["']+$/g, "").toUpperCase();
-    if (t && !seen.includes(t)) seen.push(t);
-  }
-  return seen.length ? seen.join(" + ") : null;
-}
 
-// ---- status ------------------------------------------------------------------------------------------
-// Moonraker writes these into job.status: in_progress, completed, cancelled, error, klippy_shutdown,
-// klippy_disconnect, server_exit, interrupted. Anything unknown is treated as a failure (red) on purpose.
-const STATUS_COLOR = { completed: T.ok, in_progress: T.accent, cancelled: T.warn, interrupted: T.warn };
-const statusColor = s => STATUS_COLOR[s] || T.err;
-const statusText = s => String(s || "unknown").replace(/_/g, " ").toUpperCase();
-const isDone = s => s === "completed";
-const isRunning = s => s === "in_progress";
-const GROUPS = {
-  all: null,
-  completed: ["completed"],
-  cancelled: ["cancelled", "interrupted"],
-  failed: ["error", "klippy_shutdown", "klippy_disconnect", "server_exit"],
-  in_progress: ["in_progress"],
-};
-const STATUS_TABS = [["all", "ALL"], ["completed", "DONE"], ["cancelled", "CANCELLED"], ["failed", "FAILED"], ["in_progress", "RUNNING"]];
+// ---- tabs (the status buckets are lib/history.js STATUS_TABS / statusGroup, shared with the touchscreen) --
 const RANGE_TABS = [[0, "ALL"], [7, "7D"], [30, "30D"], [90, "90D"], [365, "1Y"]];
 const SORT_TABS = [["start", "DATE"], ["dur", "TIME"], ["fil", "FILAMENT"], ["base", "NAME"]];
 const SIZES = [25, 50, 100];
 
 // ---- job rows ----------------------------------------------------------------------------------------
-function normalize(data) {
-  const list = data && Array.isArray(data.jobs) ? data.jobs : [];
-  return list.map((j, i) => {
-    const job = j || {};
-    const name = String(job.filename || "");
-    const start = num(job.start_time);
-    return {
-      // job_id is the uid server.history.delete_job wants; keep a fallback key so a row without one still renders.
-      uid: String(job.job_id == null ? "" : job.job_id),
-      key: String(job.job_id == null ? "" : job.job_id) || name + ":" + (start === null ? i : start),
-      name, base: baseName(name).replace(/\.g(code|co)?$/i, ""),
-      status: String(job.status || "unknown"),
-      start, end: num(job.end_time),
-      dur: num(job.print_duration), total: num(job.total_duration),
-      fil: num(job.filament_used),
-      exists: job.exists !== false,
-      user: String(job.user || ""),
-      meta: job.metadata || {},
-      // Providers bolt extra columns onto a job (Spoolman writes the spool ids it charged); rendered generically.
-      aux: Array.isArray(job.auxiliary_data) ? job.auxiliary_data : [],
-    };
-  });
-}
-
-/** Thumbnails live beside the g-code file: relative_path is relative to THAT file's directory. */
-function thumbUrl(api, job, minPx) {
-  // A deleted g-code took its .thumbs folder with it, and 58 of this printer's 254 rows are in that state —
-  // asking would be 58 guaranteed 404s while the user scrolls. The empty box is the answer either way.
-  if (!job || !job.exists) return "";
-  const list = job.meta && Array.isArray(job.meta.thumbnails) ? job.meta.thumbnails.filter(t => t && t.relative_path) : [];
-  if (!list.length || !api || typeof api.fileUrl !== "function") return "";
-  const sorted = list.slice().sort((a, b) => (a.width || 0) - (b.width || 0));
-  const pick = minPx ? sorted.find(t => (t.width || 0) >= minPx) || sorted[sorted.length - 1] : sorted[sorted.length - 1];
-  const dir = job.name.includes("/") ? job.name.slice(0, job.name.lastIndexOf("/") + 1) : "";
-  return api.fileUrl("gcodes", dir + pick.relative_path);
-}
-
 function deriveTotals(jobs) {
   const t = { n: 0, time: 0, fil: 0, longest: 0, done: 0, bad: 0 };
   for (const j of jobs) {
@@ -303,10 +202,12 @@ function JobDetail({ job, api, canPrint, printBlocked, locked, onReprint, onDele
     ["FILAMENT USED", fmtLen(job.fil)],
     ["SLICED LENGTH", fmtLen(numish(m.filament_total))],
     // Two different numbers, and for a cancelled job they are far apart: what this job actually pulled
-    // (estimated from length) versus what the slicer said the whole print would weigh.
-    ["WEIGHT USED", job.fil === null ? DASH : "≈ " + fmtMass(job.fil), null, FIL_NOTE],
+    // (its length at the file's own slicer g/mm, PLA estimate when it has none) versus what the slicer said
+    // the whole print would weigh.
+    ["WEIGHT USED", job.fil === null ? DASH : "≈ " + jobMass(job.fil, m), null, jobMassNote(m)],
     ["SLICED WEIGHT", weight === null ? DASH : weight.toFixed(1) + " g", null, "The slicer's figure for the complete print"],
-    ["MATERIAL", fmtMaterials(m.filament_type) || fmtMaterials(m.filament_name) || DASH],
+    // Only the tools this job used: the slicer's list has one entry per tool of the profile, not per job.
+    ["MATERIAL", jobMaterials(m) || DASH],
     ["FIRST LAYER", fmtMm(first)],
     ["LAYER HEIGHT", fmtMm(lh)],
     // layer_count is what the SLICER sliced, not the layer this job reached — Moonraker keeps no such number.
@@ -383,7 +284,7 @@ export default function Page({ store, api, navigate }) {
   // value that is not on a tab would also leave the whole segmented control looking unselected.
   const size = SIZES.includes(sizePref) ? sizePref : SIZES[0];
   const sortKey = SORT_TABS.some(t => t[0] === sortK) ? sortK : "start";
-  const status = GROUPS[statusPref] !== undefined ? statusPref : "all";
+  const status = STATUS_TABS.some(t => t[0] === statusPref) ? statusPref : "all";
   const range = RANGE_TABS.some(t => t[0] === rangePref) ? rangePref : 0;
   const sortDir = sortDirPref === "asc" ? "asc" : "desc";
   const metric = metricPref === "jobs" ? "jobs" : "time";
@@ -511,13 +412,12 @@ export default function Page({ store, api, navigate }) {
   const loadingRows = feed.loading && !jobs.length;
 
   const rows = React.useMemo(() => {
-    const group = GROUPS[status] || null;
     const needle = String(q || "").trim().toLowerCase();
     const dir = sortDir === "asc" ? 1 : -1;
     // No date filter here: `range` is applied by the server, and re-applying it against a slightly later
     // `now` would hide the oldest row of the window every time this recomputed.
     return jobs
-      .filter(j => (!group || group.includes(j.status)) && (!needle || j.name.toLowerCase().includes(needle)))
+      .filter(j => (status === "all" || statusGroup(j.status) === status) && (!needle || j.name.toLowerCase().includes(needle)))
       .sort((a, b) => dir * (sortKey === "base" ? a.base.localeCompare(b.base) : (num(a[sortKey]) || 0) - (num(b[sortKey]) || 0)));
   }, [jobs, status, q, sortKey, sortDir]);
 

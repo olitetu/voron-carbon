@@ -1,5 +1,27 @@
 // Happy Hare (v3.x) helpers shared by dashboard + pages.
 export const GATE = { EMPTY: 0, AVAILABLE: 1, BUFFER: 2, UNKNOWN: -1 };
+
+/**
+ * gate_status in Happy Hare's own vocabulary, in the order a chooser lists them. `word` is exactly what v3.4.2's
+ * _gate_map_to_string prints for the value (the MMU_GATE_MAP listing: "Empty" / "Spool" / "Buffer" / "Unknown"),
+ * upper-cased. `label` names the state the way the GATE_* constant does, and `sub` (11 characters at most: it
+ * sits nowrap under a chip) is what the source does with it:
+ *   GATE_EMPTY 0                  no filament in the gate.
+ *   GATE_AVAILABLE 1              loadable. The constant's own comment says "from either buffer or spool"; every
+ *                                 gear move for a gate that is not 2 uses gear_from_spool_speed / _accel.
+ *   GATE_AVAILABLE_FROM_BUFFER 2  loadable, and the last unload parked it in the buffer (the unload sets it when
+ *                                 unload_to_buffer); loads then use the faster gear_from_buffer_speed / _accel.
+ *   GATE_UNKNOWN -1               HH does not know: the default a gate map starts from, and what HH falls back to
+ *                                 when a sensor contradicts the recorded state. _get_filament_char draws it "?".
+ */
+export const GATE_STATES = [
+  { v: GATE.EMPTY, word: "EMPTY", label: "EMPTY", sub: "NO FILAMENT" },
+  { v: GATE.AVAILABLE, word: "SPOOL", label: "AVAILABLE", sub: "FROM SPOOL" },
+  { v: GATE.BUFFER, word: "BUFFER", label: "BUFFERED", sub: "FROM BUFFER" },
+  { v: GATE.UNKNOWN, word: "UNKNOWN", label: "UNKNOWN", sub: "NOT KNOWN" },
+];
+/** The GATE_STATES entry for a gate_status value, or null for anything Happy Hare does not define. */
+export function gateState(v) { return GATE_STATES.find(s => s.v === v) || null; }
 /**
  * filament_pos (0..10) -> 0..1 along the design's gate->nozzle route.
  * Anchors follow Happy Hare's state machine (mmu.py FILAMENT_POS_*): the bowden is the long
@@ -127,4 +149,15 @@ export function gateFill(state, g) {
   if (!sp) return ((((state.raw.mmu || {}).gate_status || [])[g]) || 0) ? 1 : 0;
   const init = sp.initial_weight || sp.filament?.weight || 1000;
   return Math.max(0, Math.min(1, (sp.remaining_weight ?? init) / init));
+}
+
+/**
+ * MMU_HOME that keeps the current tool. Happy Hare v3.4.2's cmd_MMU_HOME reads `TOOL` with a DEFAULT OF 0
+ * (`gcmd.get_int('TOOL', 0, ...)`) and selects it after homing, so a bare MMU_HOME silently moved the selection to
+ * T0. Passing the tool that is selected now homes and comes back to it. Bypass (-2) and unknown (-1) have no tool
+ * to return to, so they keep the bare command.
+ */
+export function mmuHomeCommand(mmu) {
+  const t = mmu && typeof mmu.tool === "number" ? mmu.tool : -1;
+  return t >= 0 ? "MMU_HOME TOOL=" + t : "MMU_HOME";
 }

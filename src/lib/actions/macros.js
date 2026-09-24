@@ -9,6 +9,9 @@
 // nothing runs at import time.
 // Usage (integrator): const act = { ...makeMacrosActions({ api, store, log }), ...otherActions };
 
+import { isPrinting } from "./toolhead.js";
+import { savePrefSlice } from "../prefs.js";
+
 export const MAX_MACRO_LABEL = 10;
 
 // Klipper rejects everything but a handful of commands while it is not ready — refuse locally like the design's blocked().
@@ -69,11 +72,8 @@ export function makeMacrosActions({ api, store, log } = {}) {
   }
 
   /** True while a job is actively printing (paused does not count). */
-  function printingNow() {
-    const ps = raw().print_stats || {};
-    const paused = !!((raw().pause_resume || {}).is_paused);
-    return ps.state === "printing" && !paused;
-  }
+  // The shared rule (actions/toolhead.js): printing and not paused. Kept as a local name for the call sites.
+  function printingNow() { return isPrinting(raw()); }
 
   /**
    * Run a macro (or any single gcode line) by its real name. Returns true on success.
@@ -106,19 +106,8 @@ export function makeMacrosActions({ api, store, log } = {}) {
    * Persist the macro prefs slice. The store is updated first (optimistic — the picker reacts instantly), then the
    * whole prefs object is written to Moonraker's DB (namespace carbon, key prefs). Other panels' pref keys are preserved.
    */
-  async function savePrefs(macros) {
-    const next = normalizeMacroPrefs(macros);
-    const cur = state().prefs;
-    const prefs = Object.assign({}, cur && typeof cur === "object" ? cur : {}, { macros: next });
-    if (store && typeof store.set === "function") store.set({ prefs });
-    if (!api || typeof api.dbSet !== "function") { say("Macro prefs kept for this session only — no printer connection", "warn"); return false; }
-    try {
-      await api.dbSet("prefs", prefs);
-      return true;
-    } catch (e) {
-      say("Macro prefs not saved to printer: " + errMsg(e), "err");
-      return false;
-    }
+  function savePrefs(macros) {
+    return savePrefSlice({ api, store, log: say }, "macros", normalizeMacroPrefs(macros));
   }
 
   const current = () => normalizeMacroPrefs((state().prefs || {}).macros);

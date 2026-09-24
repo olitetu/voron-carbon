@@ -9,12 +9,12 @@
 //   lenSteps / rateSteps → ctx.set({ extrudeLen | extrudeRate })      (UI-only state, lives in the logic's state)
 //   retract / extrude   → act.extrudeMove(dir, len, rate)             (src/lib/actions/extruder.js, can_extrude guard)
 // Never throws: every input may be missing before the first status update — values fall back to "—" / design defaults.
+import { controlPrefs } from "../../../lib/prefs.js";
 import { gateHex } from "../../../lib/hh.js";
 
 const DEFAULT_LEN = 100;   // mm   (design default, logic.jsx state.extrudeLen)
 const DEFAULT_RATE = 10;   // mm/s (design default, logic.jsx state.extrudeRate)
-export const LEN_STEPS = [100, 50, 25, 10];
-export const RATE_STEPS = [20, 15, 10, 5];
+// Length / feedrate presets come from lib/prefs.js (controlPrefs), shared with the touchscreen.
 export const NUM_TOOLS = 8;              // the design's 4×2 tool grid: T0..T7
 const EMPTY_COLOR = "#2a3340";           // design colour for an empty gate (hh.gateHex fallback)
 const DESIGN_BLACK = "#3f4650";          // the design's "Black" swatch — pure #000 vanishes on the panel background
@@ -153,12 +153,13 @@ export function extruderVals(ctx) {
   ];
 
   // ---- step pickers (UI-only state in ctx.ui, written through ctx.set)
-  const lenSteps = LEN_STEPS.map(v => ({
+  const cp = controlPrefs(st);
+  const lenSteps = cp.extrudeLengths.map(v => ({
     t: String(v),
     style: stepStyle(extrudeLen === v),
     go: () => { set({ extrudeLen: v }); log("Extrude length " + v + " mm"); }
   }));
-  const rateSteps = RATE_STEPS.map(v => ({
+  const rateSteps = cp.extrudeRates.map(v => ({
     t: String(v),
     style: stepStyle(extrudeRate === v),
     go: () => { set({ extrudeRate: v }); log("Extrude feedrate " + v + " mm/s"); }

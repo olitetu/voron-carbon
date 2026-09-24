@@ -143,6 +143,55 @@ PATCHES = [
     ("alerts badge",
      '''<Hv as="div" hover="border-color:#2c3746" style={S("position:relative; width:28px; height:28px; border-radius:4px; border:1px solid #1c2430; display:flex; align-items:center; justify-content:center; font-size:12px; color:#8b98aa; cursor:pointer")}><span style={S("font-family:'JetBrains Mono',monospace; font-size:10px")}>{"!"}</span><span style={S("position:absolute; top:-5px; right:-5px; min-width:15px; height:15px; padding:0 3px; border-radius:8px; background:#ff5a33; color:#0a0c10; font-family:'JetBrains Mono',monospace; font-size:9px; font-weight:700; display:flex; align-items:center; justify-content:center")}>{"9+"}</span></Hv>''',
      '''<Hv as="div" hover="border-color:#2c3746" onClick={V.alertClick} title={V.alertTitle} style={S("position:relative; width:28px; height:28px; border-radius:4px; border:1px solid #1c2430; display:flex; align-items:center; justify-content:center; font-size:12px; color:#8b98aa; cursor:pointer")}><span style={S("font-family:'JetBrains Mono',monospace; font-size:10px")}>{"!"}</span><span style={S(V.alertBadgeStyle)}>{V.alertCount}</span></Hv>''', 1),
+
+    # ---- CURRENT JOB card: LATEST PRINTS once nothing is running ----
+    # Owner: "When a print finishes, the status doesn't clear... It must display the latest prints in the window".
+    # While V.jobIdle the card's body (thumbnail, ring, stats, bar, actions) is swapped for the newest history rows
+    # and the title follows. The open and close halves must land together or the JSX is invalid; a failure in
+    # either aborts the whole run, so they can never be applied apart.
+    ("job card title",
+     '{"CURRENT JOB"}',
+     '{V.jobPanelTitle || "CURRENT JOB"}', 1),
+    ("job card idle body (open)",
+     '''{V.jobEta}</span></div><div style={S("position:relative; height:132px;''',
+     '''{V.jobEta}</span></div>{V.jobIdle ? (<><div style={S(V.recentListStyle)}>{(V.recentPrints || []).map(r => (<div key={r.key} title={r.title} style={S(r.rowStyle)}><div style={S(r.thumbBoxStyle)}>{r.thumb ? <img src={r.thumb} alt="" style={S(r.thumbStyle)} /> : null}</div><div style={S("flex:1; min-width:0")}><div style={S(r.nameStyle)}>{r.name}</div><div style={S(r.metaStyle)}>{r.meta}</div></div><div style={S(r.sideStyle)}><span style={S(r.statusStyle)}>{r.status}</span>{r.reprint ? <Hv as="div" hover="border-color:#2c3746; color:#e8eef6" active="transform:translateY(1px)" onClick={r.reprint} title={r.reprintTitle} style={S(r.reprintStyle)}>{r.reprintLabel}</Hv> : r.gone ? <span style={S(r.goneStyle)}>{r.goneLabel}</span> : null}</div></div>))}{V.recentEmpty ? <div style={S(V.recentEmptyStyle)}>{V.recentEmpty}</div> : null}</div><Hv as="div" hover="background:#131a24; color:#e8eef6" active="transform:translateY(1px)" onClick={V.recentAll} style={S(V.recentAllStyle)}>{V.recentAllLabel}</Hv></>) : (<><div style={S("position:relative; height:132px;''', 1),
+    ("job card idle body (close)",
+     '{a.t}</Hv></React.Fragment>))}</div></section>',
+     '{a.t}</Hv></React.Fragment>))}</div></>)}</section>', 1),
+
+    # ---- WEBCAM header: the dead kebab becomes REFRESH ----
+    # Owner: "sometimes the camera freezes, I'd like a refresh button on the top right". The glyph there had no
+    # onClick at all. REFRESH hands the <img> a fresh URL, the only way to make a stalled MJPEG stream reconnect.
+    # Twice: the wide and narrow layouts each draw the panel.
+    ("webcam refresh button",
+     '''{V.camLabel}</span><Hv as="span" hover="color:#e8eef6" style={S("font-family:'JetBrains Mono',monospace; font-size:11px; color:#4d5a6b; cursor:pointer; margin-left:10px")}>{"\\u22ee"}</Hv></div>''',
+     '''{V.camLabel}</span><Hv as="span" hover="color:#e8eef6; border-color:#2c3746" active="transform:translateY(1px)" onClick={V.camRefresh} title={V.camRefreshTitle} style={S(V.camRefreshStyle)}>{V.camRefreshLabel}</Hv></div>''', 2),
+
+    # ---- top bar: the cog opens SETTINGS ----
+    # Owner: "The cog icon at the top doesn't open any setting menu". It had a hover style and no onClick at all.
+    ("settings cog",
+     '''<Hv as="div" hover="border-color:#2c3746" style={S("width:28px; height:28px; border-radius:4px; border:1px solid #1c2430; display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-size:11px; color:#8b98aa; cursor:pointer")}>{"\\u2699"}</Hv>''',
+     '''<Hv as="div" hover="border-color:#2c3746; color:#e8eef6" active="transform:translateY(1px)" onClick={V.toggleSettings} title="Settings" style={S(V.settingsBtnStyle)}>{"\\u2699"}</Hv>''', 1),
+    ("printer name",
+     '{"VORON 2.4"}',
+     '{V.printerName || "VORON 2.4"}', 1),
+
+    # ---- the last four dead kebabs ----
+    # Owner, first UI batch: "the ... menus lead to empty links". These four had a hover style and no onClick.
+    # CONSOLE and HEIGHTMAP have a full page behind them, so the glyph becomes an open-page arrow; TEMPERATURES and
+    # TOOL & EXTRUDER have nothing behind them, so the glyph goes rather than inventing a menu to justify it.
+    ("console: open full page",
+     '''{V.clock}</span><Hv as="span" hover="color:#e8eef6" style={S("font-family:'JetBrains Mono',monospace; font-size:11px; color:#4d5a6b; cursor:pointer; margin-left:10px")}>{"\\u22ee"}</Hv>''',
+     '''{V.clock}</span><Hv as="span" hover="color:#e8eef6" onClick={V.openConsolePage} title="Open the full console" style={S("font-family:'JetBrains Mono',monospace; font-size:11px; color:#4d5a6b; cursor:pointer; margin-left:10px")}>{V.openPageGlyph}</Hv>''', 1),
+    ("heightmap: open full page",
+     '''{V.meshName}</span><Hv as="span" hover="color:#e8eef6" style={S("font-family:'JetBrains Mono',monospace; font-size:11px; color:#4d5a6b; cursor:pointer; margin-left:10px")}>{"\\u22ee"}</Hv>''',
+     '''{V.meshName}</span><Hv as="span" hover="color:#e8eef6" onClick={V.openHeightmapPage} title="Open the heightmap page" style={S("font-family:'JetBrains Mono',monospace; font-size:11px; color:#4d5a6b; cursor:pointer; margin-left:10px")}>{V.openPageGlyph}</Hv>''', 1),
+    ("temperatures: drop dead kebab",
+     '''{o.detail}</span></Hv></React.Fragment>))}</span></span><Hv as="span" hover="color:#e8eef6" style={S("font-family:'JetBrains Mono',monospace; font-size:11px; color:#4d5a6b; cursor:pointer; margin-left:10px")}>{"\\u22ee"}</Hv>''',
+     '''{o.detail}</span></Hv></React.Fragment>))}</span></span>''', 1),
+    ("tool & extruder: drop dead kebab",
+     '''<Hv as="span" hover="color:#e8eef6" style={S("font-family:'JetBrains Mono',monospace; font-size:11px; color:#4d5a6b; cursor:pointer")}>{"\\u22ee"}</Hv>''',
+     '', 1),
 ]
 
 for label, needle, repl, want in PATCHES:
@@ -536,6 +585,21 @@ if "V.jobThumb" not in src:
         failed.append('job thumbnail: could not find the {"GCODE THUMBNAIL"} placeholder box')
 else:
     applied.append("job thumbnail img (already patched)")
+
+# ---- SETTINGS panel mount: right after the popover scrim, at the root ----
+# Inside the header (z-index 5) it would sit under the scrim (z-index 30) and every click on it would close it.
+# GUARDED, not a PATCHES entry: the replacement contains the needle, so a count-based rule re-injects on every run
+# (it did: three stacked panels after three runs).
+if "{V.settingsPanel}" not in src:
+    needle = '<div onClick={V.closePops} style={S(V.popScrimStyle)}></div>'
+    n = src.count(needle)
+    if n == 1:
+        src = src.replace(needle, needle + "{V.settingsPanel}", 1)
+        applied.append("settings panel mount (1x)")
+    else:
+        failed.append(f"settings panel mount: found {n} occurrence(s) of the popover scrim, expected 1")
+else:
+    applied.append("settings panel mount (already patched)")
 
 if failed:
     print("PATCH FAILURES — Template.jsx left untouched:", file=sys.stderr)

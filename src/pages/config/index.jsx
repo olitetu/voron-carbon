@@ -14,6 +14,7 @@
 import React from "react";
 import { Panel, Btn, Chip, Label, Row, Input, Confirm, T, mono, fmtBytes, fmtDate } from "../../lib/design.jsx";
 import { S, Hv } from "../../lib/ui.js";
+import { downloadProps, downloadHint } from "../../lib/webview.js";
 import { useStore, useAsync, usePersisted } from "../../lib/useStore.js";
 import { makeMachineActions, isPrintActive } from "../../lib/actions/machine.js";
 
@@ -353,9 +354,13 @@ function loadEditor() {
 // ---------------------------------------------------------------------------------------------
 // Small pieces
 // ---------------------------------------------------------------------------------------------
-/** Anchor styled as a Btn — same-tab `download` href, never target=_blank (Orca ejects to Safari). */
+/**
+ * Anchor styled as a Btn that downloads its target. The HOW depends on the host (lib/webview.js): Orca's
+ * webview silently drops a same-tab download but hands a new window to the system browser, a real browser
+ * is the other way round.
+ */
 function LinkBtn({ href, children, title }) {
-  return <Hv as="a" href={href} download title={title}
+  return <Hv as="a" href={href} {...downloadProps()} title={title}
     style={`padding:4px 8px; border:1px solid ${T.line}; background:${T.panel}; border-radius:4px; ${mono(9, `letter-spacing:.1em; color:${T.dim}`)}; text-decoration:none; white-space:nowrap; transition:.12s`}
     hover={`border-color:${T.line2}; color:${T.text}`} active="transform:translateY(1px)">{children}</Hv>;
 }
@@ -644,7 +649,7 @@ function EditorPanel({ api, act, sel, file, group, badges, printing, connected, 
       {changed && <Chip color={T.warn} pulse>UNSAVED</Chip>}
       {diskStale && <div title="The listing shows a newer copy on the printer than the one loaded here"><Chip color={T.accent}>CHANGED ON DISK</Chip></div>}
       {diskStale && <Btn small onClick={reload} title="Re-read the file from the printer (a draft is kept)">RELOAD</Btn>}
-      {path && <LinkBtn href={api ? api.fileUrl("config", path) : "#"} title={"Download " + path}>GET</LinkBtn>}
+      {path && <LinkBtn href={api ? api.fileUrl("config", path) : "#"} title={"Download " + path + " — " + downloadHint}>DOWNLOAD</LinkBtn>}
       <Btn small disabled={!hasDraft || saving} onClick={revert} title="Drop the local draft">REVERT</Btn>
       <Btn small kind="ok" disabled={!changed || saving || readOnly} onClick={() => askSave(false)}>{saving ? "…" : "SAVE"}</Btn>
       <Btn small kind="warn" disabled={!changed || saving || readOnly || printing} onClick={() => askSave(true)}
@@ -660,7 +665,7 @@ function EditorPanel({ api, act, sel, file, group, badges, printing, connected, 
         <div style={S(`${mono(10.5, `color:${T.mute}`)}; letter-spacing:.1em`)}>{tooBig ? "TOO LARGE TO EDIT" : "NOT A TEXT FILE"}</div>
         <div style={S(`font-size:12px; color:${T.dim}; margin-top:8px; text-wrap:pretty`)}>
           {tooBig ? fmtBytes(meta.size) + " is past the editor's " + fmtBytes(MAX_EDIT) + " limit." : "This one is only offered as a download."}</div>
-        <div style={S("margin-top:12px; display:flex; justify-content:center")}><LinkBtn href={api ? api.fileUrl("config", path) : "#"}>DOWNLOAD</LinkBtn></div>
+        <div style={S("margin-top:12px; display:flex; justify-content:center")}><LinkBtn href={api ? api.fileUrl("config", path) : "#"} title={"Download " + path + " — " + downloadHint}>DOWNLOAD</LinkBtn></div>
       </div>}
 
       {!!path && editable && <>

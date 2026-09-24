@@ -15,6 +15,9 @@
 // them only under profiles[<name>].mesh_params — so configfile.settings.bed_mesh is the fallback.
 // Every command is refused while a job is printing OR paused: BED_MESH_CLEAR mid-job silently drops z
 // compensation for the rest of the print, and probing needs the bed to itself.
+// Profile rows and the profile-name rule are lib/bedmesh.js, shared with Carbon Screen's BED MESH screen. Only
+// [A-Za-z0-9_.-] names are sent: Klipper reads extended parameters with shlex, where '#' and ';' start a comment
+// and quotes are consumed, so "REMOVE=a;b" or "REMOVE=a#b" would remove profile 'a'.
 import React from "react";
 import { Panel, Btn, Chip, Label, Val, Row, Divider, Input, Toggle, Table, Confirm, T, mono } from "../../lib/design.jsx";
 import { S } from "../../lib/ui.js";
@@ -23,6 +26,7 @@ import { has, help } from "../../lib/caps.js";
 import { renderIsoMesh, meshStats, pickMesh, colorForZ, cleanMatrix, ISO_GRADIENT_CSS, DESIGN_ZSCALE, DESIGN_YAW, DESIGN_PITCH } from "../dashboard/adapters/isoMesh.js";
 import { fmtSignedMm, fmtMm } from "../dashboard/adapters/heightmap.js";
 import { makeToolheadActions } from "../../lib/actions/toolhead.js";
+import { profileRows, isSendableProfile, saveNameProblem, UNSENDABLE } from "../../lib/bedmesh.js";
 
 const DASH = "—";
 /** Points per side offered by the DETAIL picker; 0 = every probed point (50×50 here → 2401 quads). */
@@ -42,8 +46,6 @@ const num = v => (typeof v === "number" && isFinite(v) ? v : null);
 const mm = (v, d = 1) => (num(v) === null ? DASH : v.toFixed(d));
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const wrap360 = a => ((a % 360) + 360) % 360;
-/** Klipper's gcode parser splits on whitespace, so a profile name with a space (or '=') can never be addressed. */
-const validName = n => /^[^\s=]+$/.test(n);
 
 /** The persisted camera, re-validated field by field — localStorage can hold junk or an older shape. */
 function cleanView(v) {
@@ -137,25 +139,19 @@ export default function Page({ store, api }) {
   }, [store]);
 
   // BED_MESH_CALIBRATE goes through the shared toolhead action rather than a local copy: it owns the homing and
-  // QGL pre-checks (including the case where printer.cfg wraps the native in a macro that homes itself) and
-  // treats the 30 s rpc timeout on a probe run as "still running" instead of an error.
+  // QGL pre-checks (a same-named macro, like this printer's KAMP wrapper, is not assumed to home) and treats the
+  // 30 s rpc timeout on a probe run as "still running" instead of an error.
   const act = React.useMemo(() => makeToolheadActions({ api, store, log }), [api, store, log]);
 
   // ---- profiles -----------------------------------------------------------
-  const profiles = React.useMemo(() => {
-    const all = (bm && bm.profiles && typeof bm.profiles === "object") ? bm.profiles : {};
-    return Object.keys(all).sort().map(name => {
-      const p = all[name] || {};
-      const mp = p.mesh_params || {};
-      const s = meshStats(p.points);
-      return { name, mp, s, grid: num(mp.x_count) && num(mp.y_count) ? `${mp.x_count}×${mp.y_count}` : s ? `${s.cols}×${s.rows}` : DASH };
-    });
-  }, [bm]);
+  const profilesRef = bm ? bm.profiles : null;
+  const profiles = React.useMemo(() => profileRows(profilesRef), [profilesRef]);
   const activeName = bm && bm.profile_name ? String(bm.profile_name) : "";
   const names = profiles.map(p => p.name);
   // The persisted selection wins, then the loaded profile, then whatever exists.
   const selName = names.indexOf(sel) >= 0 ? sel : names.indexOf(activeName) >= 0 ? activeName : names[0] || "";
   const selProfile = profiles.find(p => p.name === selName) || null;
+  const selSendable = isSendableProfile(selName);
 
   // ---- what to draw -------------------------------------------------------
   const picked = React.useMemo(() => pickMesh(bm, { fallbackSaved: true, prefer: selName }), [bm, selName]);
@@ -349,12 +345,20 @@ export default function Page({ store, api }) {
   // stale outline is drawn against the new viewBox for one frame every time DETAIL or Z SCALE changes.
   React.useLayoutEffect(() => { setHover(null); }, [view]);
 
-  const params = (picked && picked.profile && picked.profile.mesh_params) || (selProfile && selProfile.mp) || {};
+  const params = (picked && picked.profile && picked.profile.mesh_params) || (selProfile && selProfile.params) || {};
   const bounds = picked && picked.bounds;
   const meshRows = bm && Array.isArray(bm.mesh_matrix) && bm.mesh_matrix.length ? bm.mesh_matrix.length : 0;
   const meshCols = meshRows && Array.isArray(bm.mesh_matrix[0]) ? bm.mesh_matrix[0].length : 0;
   const probePts = num(params.x_count) && num(params.y_count) ? params.x_count * params.y_count
     : Array.isArray(cfg && cfg.probe_count) ? cfg.probe_count[0] * cfg.probe_count[1] : null;
+  // What CALIBRATE will actually probe is NOT the loaded profile's grid. BED_MESH_CALIBRATE here is KAMP's macro:
+  // with print objects defined it meshes their footprint (count unknown until it runs), and with none — any time
+  // outside a job — it falls back to the full configured probe_count (50x50 on this printer). Quoting the loaded
+  // KAMP-footprint 'default' (10x11 = 110) promised a two-minute probe for what is really a 2500-point one.
+  const kampObjects = (((st.raw && st.raw.exclude_object) || {}).objects || []).length;
+  const fullGrid = Array.isArray(cfg && cfg.probe_count) ? cfg.probe_count[0] * cfg.probe_count[1] : null;
+  const calibText = kampObjects ? `the ${kampObjects} print object${kampObjects === 1 ? "" : "s"}' footprint (KAMP)`
+    : fullGrid ? fullGrid + " points (no print objects, so KAMP meshes the full grid)" : "the bed";
 
   // Axis labels ride the ground frame's front edges (X: fl→fr, Y: fl→bl), so they turn with the mesh and always
   // point along +axis; the text is flipped upright when the edge runs leftwards. Sized in user units divided by
@@ -414,16 +418,28 @@ export default function Page({ store, api }) {
     } finally { end(); }
   }
 
-  const loadProfile = () => selName && send(`BED_MESH_PROFILE LOAD=${selName}`, `Mesh profile '${selName}' loaded`);
+  /** An existing profile is addressed only when lib/bedmesh.js would send its name; otherwise say why and send nothing. */
+  const sendable = (what, name) => {
+    if (isSendableProfile(name)) return true;
+    log(`${what} refused — ${UNSENDABLE}`, "warn");
+    return false;
+  };
+  const loadProfile = () => selName && sendable("LOAD", selName) && send(`BED_MESH_PROFILE LOAD=${selName}`, `Mesh profile '${selName}' loaded`);
   const clearMesh = () => send("BED_MESH_CLEAR", "Bed mesh cleared — no z compensation until a profile is loaded");
-  const removeProfile = name => send(`BED_MESH_PROFILE REMOVE=${name}`, `Profile '${name}' removed — SAVE_CONFIG to make it permanent`);
+  const removeProfile = name => sendable("REMOVE", name) && send(`BED_MESH_PROFILE REMOVE=${name}`, `Profile '${name}' removed — SAVE_CONFIG to make it permanent`);
   const doSave = name => send(`BED_MESH_PROFILE SAVE=${name}`, `Mesh saved as '${name}' — SAVE_CONFIG to write it to printer.cfg`);
+  // An empty field saves under the loaded profile's name, but never 'default': bed_mesh.py answers SAVE=default
+  // with "Profile 'default' is reserved" as plain info, so the page used to log a save that never happened.
+  const fallbackName = activeName && !saveNameProblem(activeName) ? activeName : "";
+  const saveTarget = String(saveName || "").trim() || fallbackName;
+  const saveBad = saveNameProblem(saveTarget);
   function saveProfile() {
-    const name = String(saveName || "").trim() || activeName || "default";
-    if (!validName(name)) { log("Profile name may not contain spaces or '=' — Klipper cannot address it", "warn"); return; }
+    // No mesh first: with nothing loaded the name is beside the point (and the Input's Enter still gets here).
     if (!picked || picked.saved) { log("Nothing to save — no mesh is loaded (probe one first)", "warn"); return; }
+    if (saveBad) { log(`SAVE refused — ${saveBad}`, "warn"); return; }
+    const name = saveTarget;
     // Klipper replaces a same-named profile without asking and the mesh it drops cannot be recovered — and the
-    // field is EMPTY by default, so a bare click targets the placeholder (the loaded profile, else "default").
+    // field is EMPTY by default, so a bare click targets the placeholder (the loaded profile's name).
     if (names.indexOf(name) >= 0) { setConfirm({ kind: "overwrite", name }); return; }
     doSave(name);
   }
@@ -467,7 +483,7 @@ export default function Page({ store, api }) {
     : confirm.kind === "clear" ? (clearUnsaved
         ? "Clear the mesh? It was never saved to a profile, so the only way back is another probe run."
         : `Clear the mesh? Z compensation stops until a profile is loaded — '${picked ? picked.name : "default"}' can be re-loaded from the list above.`)
-    : confirm.kind === "calibrate" ? `Probe ${probePts ? probePts + " points" : "the bed"} now? Several minutes, and the toolhead moves.`
+    : confirm.kind === "calibrate" ? `Probe ${calibText} now? Several minutes, and the toolhead moves.`
     : "Recalibrate the Cartographer? It homes, levels and replaces the saved probe model.";
 
   // ---- header / empty-state copy ------------------------------------------
@@ -598,8 +614,8 @@ export default function Page({ store, api }) {
               { k: "name", label: "PROFILE", w: "1fr", render: r => <Row gap={6}>
                 <span style={S(`width:5px; height:5px; border-radius:50%; flex:none; background:${r.name === activeName ? T.ok : T.ghost}`)} />
                 <span style={S(`overflow:hidden; text-overflow:ellipsis; color:${r.name === selName ? T.text : T.body}`)}>{r.name}</span></Row> },
-              { k: "grid", label: "GRID", w: "58px", align: "right" },
-              { k: "range", label: "RANGE mm", w: "70px", align: "right", render: r => r.s ? r.s.range.toFixed(3) : DASH },
+              { k: "grid", label: "GRID", w: "58px", align: "right", render: r => r.grid || DASH },
+              { k: "range", label: "RANGE mm", w: "70px", align: "right", render: r => r.stats ? r.stats.range.toFixed(3) : DASH },
             ]}
             rows={profiles} rowKey={r => r.name} onRow={r => setSel(r.name)}
             rowStyle={r => (r.name === selName ? "background:#131a24" : "")}
@@ -609,11 +625,11 @@ export default function Page({ store, api }) {
         <div style={S("padding:10px 12px 12px; display:flex; flex-direction:column; gap:8px")}>
           <Row gap={6}>
             {/* with no profiles at all selName is "", so the titles have to say that rather than "'' is already loaded" */}
-            <Btn kind="ok" disabled={!can("BED_MESH_PROFILE") || !!jobState || !!busy || !selName || selName === activeName}
-              title={!selName ? "No saved profile to load" : selName === activeName ? `'${selName}' is already loaded` : why("BED_MESH_PROFILE", `BED_MESH_PROFILE LOAD=${selName}`)}
+            <Btn kind="ok" disabled={!can("BED_MESH_PROFILE") || !!jobState || !!busy || !selName || !selSendable || selName === activeName}
+              title={!selName ? "No saved profile to load" : !selSendable ? UNSENDABLE : selName === activeName ? `'${selName}' is already loaded` : why("BED_MESH_PROFILE", `BED_MESH_PROFILE LOAD=${selName}`)}
               onClick={loadProfile}>LOAD</Btn>
-            <Btn kind="danger" disabled={!can("BED_MESH_PROFILE") || !!jobState || !!busy || !selName}
-              title={!selName ? "No saved profile to remove" : why("BED_MESH_PROFILE", `BED_MESH_PROFILE REMOVE=${selName}`)}
+            <Btn kind="danger" disabled={!can("BED_MESH_PROFILE") || !!jobState || !!busy || !selName || !selSendable}
+              title={!selName ? "No saved profile to remove" : !selSendable ? UNSENDABLE : why("BED_MESH_PROFILE", `BED_MESH_PROFILE REMOVE=${selName}`)}
               onClick={() => setConfirm({ kind: "remove", name: selName })}>REMOVE</Btn>
             <Btn disabled={!can("BED_MESH_CLEAR") || !!jobState || !!busy || !(picked && !picked.saved)}
               title={!picked || picked.saved ? "No mesh is loaded" : why("BED_MESH_CLEAR")}
@@ -622,9 +638,11 @@ export default function Page({ store, api }) {
 
           <Row gap={6}>
             <Input value={saveName} onChange={e => setSaveName(e.target.value)} onEnter={saveProfile}
-              placeholder={activeName || "default"} style="flex:1; min-width:0" />
+              placeholder={fallbackName || "profile name"} style="flex:1; min-width:0" />
             <Btn disabled={!can("BED_MESH_PROFILE") || !!jobState || !!busy || !(picked && !picked.saved)}
-              title={picked && picked.saved ? "No mesh is loaded — probe one first" : why("BED_MESH_PROFILE", "BED_MESH_PROFILE SAVE=<name> (needs SAVE_CONFIG afterwards)")}
+              title={!picked || picked.saved ? "No mesh is loaded — probe one first"
+                : saveBad && can("BED_MESH_PROFILE") && !jobState ? `Cannot save: ${saveBad}`
+                : why("BED_MESH_PROFILE", "BED_MESH_PROFILE SAVE=<name> (needs SAVE_CONFIG afterwards)")}
               onClick={saveProfile}>SAVE</Btn>
           </Row>
 
@@ -643,7 +661,7 @@ export default function Page({ store, api }) {
           {/* prose, so sans at the design's note size — mono is this UI's micro-LABEL face, not its body face */}
           <div style={S(`font-size:11px; color:${T.dim}; line-height:1.5; text-wrap:pretty`)}>
             {jobState ? `Mesh commands are refused while a job is ${jobState}.`
-              : `CALIBRATE probes ${probePts ? probePts + " points" : "the bed"} and takes several minutes — the toolhead moves. Saving or removing a profile also needs SAVE_CONFIG, which restarts Klipper.`}
+              : `CALIBRATE probes ${calibText} and takes several minutes — the toolhead moves. Saving or removing a profile also needs SAVE_CONFIG, which restarts Klipper.`}
           </div>
         </div>
 

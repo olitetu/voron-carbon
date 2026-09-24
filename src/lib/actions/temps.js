@@ -6,6 +6,8 @@
 // Every action logs the command (or a short intent line), awaits api.gcode and logs errors; nothing throws.
 // Usage: const act = makeTempsActions({ api, store, log });   (merged with the other panels' actions by the integrator)
 
+import { isPrinting } from "./toolhead.js";
+
 export const MAX_EXTRUDER = 300;   // °C — the design's cfg.maxExtruder (Rapido HF)
 export const MAX_BED = 120;        // °C — the design's cfg.maxBed (Keenovo)
 
@@ -53,11 +55,8 @@ export function makeTempsActions({ api, store, log } = {}) {
   }
 
   /** True while a job is actively printing (paused does not count). */
-  function printingNow() {
-    const ps = raw().print_stats || {};
-    const paused = !!((raw().pause_resume || {}).is_paused);
-    return ps.state === "printing" && !paused;
-  }
+  // The shared rule (actions/toolhead.js): printing and not paused. Kept as a local name for the call sites.
+  function printingNow() { return isPrinting(raw()); }
 
   async function run(script, okMsg) {
     try {

@@ -368,7 +368,9 @@ export default function Page({ store, api, route, navigate }) {
       try { v.clear(); } catch (e) { /* first load */ }
       try { v.setRenderTubes(plan.id === "tubes" && tubes); } catch (e) { /* bundle predates it */ }
       if (typeof TextDecoderStream !== "function") throw new Error("this webview has no TextDecoderStream");
-      const r = await fetch(api.fileUrl("gcodes", sel), { signal: ctrl.signal });
+      // no-cache: a re-slice from Orca overwrites the SAME filename, and a heuristically fresh cache entry would
+      // preview the previous slice for hours. Unchanged files revalidate as a 0-byte 304.
+      const r = await fetch(api.fileUrl("gcodes", sel), { signal: ctrl.signal, cache: "no-cache" });
       if (!r.ok) throw new Error(`${r.status} ${r.statusText || "fetch failed"}`);
       if (!r.body) throw new Error("this webview cannot stream responses");
       // The size policy runs off the directory listing. A file that is not IN that listing (a deep link or

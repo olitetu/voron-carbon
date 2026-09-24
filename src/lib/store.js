@@ -18,6 +18,7 @@ export class Store {
       commands: null,          // printer.gcode.commands — every registered command -> {help?}
       commandsStale: false,    // true while klippy is not ready (the catalogue collapses on shutdown)
       prefs: {},               // persisted UI prefs (carbon namespace)
+      recentJobs: null,        // newest history rows (lib/history.js normalize) — null until first loaded
       ui: { route: "/" },
       uiPhase: null,          // transient motion hint (see signalMotion)
       cutter: null,           // live EREC cutter state (see setCutter) — driven by the macro's own events

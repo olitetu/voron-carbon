@@ -19,6 +19,8 @@
 // destination and reports success — a rename onto a neighbour's name destroys that file. Only the caller holds
 // the directory listing, so the collision check lives in the page (promptErr), not here.
 
+import { downloadUrl } from "../webview.js";
+
 const ROOT = "gcodes";
 
 /** Extensions Moonraker will accept into the gcodes root. Anything else is refused by the upload endpoint. */
@@ -195,17 +197,17 @@ export function makeFilesActions({ api, store, log } = {}) {
       }
     },
     /**
-     * DOWNLOAD. Moonraker serves /server/files/* with `Content-Disposition: attachment`, so a same-tab
-     * navigation hands the file to the browser's downloader and leaves the app exactly where it is.
-     * target="_blank" is not an option here: Orca's OnNewWindow handler ejects the user into their
-     * system browser and cancels the navigation.
+     * DOWNLOAD. Moonraker serves /server/files/* with `Content-Disposition: attachment`. In a browser a
+     * same-tab navigation hands that to the downloader and the app stays put; in Orca the same navigation
+     * is silently dropped (no download handler), so there it goes out as a new window, which Orca passes to
+     * the system browser. lib/webview.js owns that choice.
      */
     downloadFile(path) {
       if (noApi()) return Promise.resolve(false);
       const p = String(path || "").trim();
       if (!p) { L("DOWNLOAD — no file selected", "warn"); return Promise.resolve(false); }
       L("DOWNLOAD " + p);
-      try { location.assign(api.fileUrl(ROOT, p)); return Promise.resolve(true); }
+      try { downloadUrl(api.fileUrl(ROOT, p)); return Promise.resolve(true); }
       catch (e) { L(errMsg(e), "err"); return Promise.resolve(false); }
     },
   };

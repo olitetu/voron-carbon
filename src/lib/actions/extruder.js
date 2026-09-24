@@ -7,6 +7,8 @@
 // Every action logs the command (or a short intent line), awaits api.gcode and logs errors; nothing throws.
 // Usage: const act = makeExtruderActions({ api, store, log });   (merged with the other panels' actions by the integrator)
 
+import { isPrinting } from "./toolhead.js";
+
 export const DEFAULT_LEN = 100;   // mm   (used only when the caller passes no length)
 export const DEFAULT_RATE = 10;   // mm/s (used only when the caller passes no feedrate)
 export const FACTOR_MIN = 10, FACTOR_MAX = 300;   // % — the panel's bar itself spans 20..200
@@ -60,11 +62,8 @@ export function makeExtruderActions({ api, store, log } = {}) {
   }
 
   /** True while a job is actively printing (a paused print does not count — manual moves / tool changes are how runouts get fixed). */
-  function printingNow() {
-    const ps = raw().print_stats || {};
-    const paused = !!((raw().pause_resume || {}).is_paused);
-    return ps.state === "printing" && !paused;
-  }
+  // The shared rule (actions/toolhead.js): printing and not paused. Kept as a local name for the call sites.
+  function printingNow() { return isPrinting(raw()); }
 
   async function run(script, okMsg) {
     try {

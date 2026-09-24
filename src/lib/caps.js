@@ -40,6 +40,34 @@ export function pick(state, candidates) {
   return null;
 }
 
+/**
+ * The command name Klipper will dispatch for ONE physical line, derived step for step as this printer's
+ * klippy/gcode.py (v0.13.0) _process_commands does it: cut at ';', upper-case, split on
+ * args_r = ([A-Z_]+|[A-Z*]) keeping the captures, then
+ *     if ''.join(parts[:2]) == 'N': cmd = ''.join(parts[3:5]).strip()    # skip a line number
+ *     else:                         cmd = ''.join(parts[:3]).strip()
+ * Text before the first letter is part of the name ('5G1' is the unknown command '5G1', and a bare '123' is
+ * the unknown command '123'); a blank or comment-only line has no command ("").
+ *
+ * Splitting on whitespace or '=' instead gets the traditional form wrong: 'G1X10' is G1 and 'M104S200' is
+ * M104, both valid and both sent that way by slicers, where a whitespace split yields 'G1X10' / 'M104S200' and
+ * finds no such command. Extended commands come out whole ('MMU_LOAD GATE=1' -> 'MMU_LOAD'), because '_' is
+ * in the name class.
+ *
+ * One quirk is kept on purpose: a traditional command followed by text with no second letter keeps that text
+ * ('M117 50% DONE' -> 'M117 50%'). Klipper's cmd_default then re-splits on whitespace for M117/M118/M23 only;
+ * that is dispatch, not naming, so it is left to the caller (see screen/actions.js missing()).
+ */
+const ARGS_R = /([A-Z_]+|[A-Z*])/;
+export function klipperCommand(line) {
+  let s = String(line == null ? "" : line).trim();
+  const c = s.indexOf(";");
+  if (c >= 0) s = s.slice(0, c);
+  // JS split with a capturing group keeps the captures, exactly like Python's re.split.
+  const parts = s.toUpperCase().split(ARGS_R);
+  return (parts.slice(0, 2).join("") === "N" ? parts.slice(3, 5) : parts.slice(0, 3)).join("").trim();
+}
+
 /** Every command name, sorted — the autocomplete source for the console. */
 export function allCommands(state) {
   const cmds = (state && state.commands) || null;

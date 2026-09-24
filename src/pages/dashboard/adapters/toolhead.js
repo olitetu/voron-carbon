@@ -7,18 +7,23 @@
 //               raw.toolhead.axis_maximum (335 / 355 / 320 on this Voron), falling back to the contract's 350 / 350 / 310.
 //   homeBtns  → act.home('HOME'|'XY'|'QGL'|'MESH'|'PARK'|'CARTO')   — MOTORS lives in MACHINE LIMITS
 //               SMART_HOME · G28 X Y · QUAD_GANTRY_LEVEL · BED_MESH_CALIBRATE · BLOBIFIER_PARK ·
-//               CARTOGRAPHER_CALIBRATE · M84. Every one is refused while printing (actions/toolhead.js).
+//               CARTOGRAPHER_CALIBRATE · M84. Every one is refused while printing (actions/toolhead.js), and QGL /
+//               MESH also until X, Y and Z are homed (this printer's KAMP BED_MESH_CALIBRATE does not home itself).
 //   jogRows   → act.jog(axis, ±step)  X/Y 100·50·1, Z 50·10·1; the centre axis cell homes THAT axis only (X → G28 X, …).
 //               Was (Z → HOME, X/Y → XY) to match the design mockup, but a per-axis button that homes all three is a
 //               surprise on a printer mid-setup — and act.home already supports the X / Y / Z kinds (see actions/toolhead.js).
 //   zSteps    → act.nudgeZ(±0.005 | ±0.025)                                 (SET_GCODE_OFFSET Z_ADJUST=… MOVE=1)
 //   zField    ← raw.gcode_move.homing_origin[2].toFixed(3) via ctx.field('zoff', shown, commit) → act.setZ(n)
+//               Both are judged by actions/toolhead.js zNudgePlan / zSetPlan, the rules the touchscreen's Z screens
+//               share: refused (with the reason in the log) past ±5 mm, a MOVE=1 lowering below the bed or while Happy
+//               Hare is mid-sequence, and mid-print a typed jump over 1 mm. This adapter only forwards the taps.
 //   saveZ     → act.saveZ()                                                 (Z_OFFSET_APPLY_PROBE → "SAVE_CONFIG pending")
 // Never throws: every input may be missing before the first status update — values fall back to "—" / grey bars.
-import { axisLimits, isHomed, axisPosition, zOffsetOf, HOME_CMDS, JOG_FEED, fmtNum } from "../../../lib/actions/toolhead.js";
+import { controlPrefs, jogFeed } from "../../../lib/prefs.js";
+import { axisLimits, isHomed, isPrinting, axisPosition, zOffsetOf, HOME_CMDS, fmtNum } from "../../../lib/actions/toolhead.js";
 
-/** Design jog rows: [axis, [coarse, medium, fine]] — rendered as −c −m −f [axis] +f +m +c. */
-export const JOG_STEPS = [["X", [100, 50, 1]], ["Y", [100, 50, 1]], ["Z", [50, 10, 1]]];
+/** Design jog rows: [axis, [coarse, medium, fine]] — rendered as −c −m −f [axis] +f +m +c. Values: lib/prefs.js. */
+export const jogSteps = st => { const c = controlPrefs(st); return [["X", c.stepsXY], ["Y", c.stepsXY], ["Z", c.stepsZ]]; };
 /** Design Z-offset nudge buttons. */
 export const Z_STEPS = [-0.025, -0.005, 0.005, 0.025];
 /** Design home buttons (left → right). */
@@ -98,7 +103,7 @@ export function toolheadVals(ctx) {
   // ---- action bridges (log the intended gcode when the integrator has not merged the toolhead actions yet)
   const jog = (ax, d) => {
     if (typeof act.jog === "function") act.jog(ax, d);
-    else log("G91 · G1 " + ax + (d > 0 ? "+" : "") + d + " F" + JOG_FEED[ax] + " · G90 — toolhead actions not wired", "warn");
+    else log("G91 · G1 " + ax + (d > 0 ? "+" : "") + d + " F" + jogFeed(st, ax) + " · G90 — toolhead actions not wired", "warn");
   };
   const home = kind => {
     if (typeof act.home === "function") act.home(kind);
@@ -126,9 +131,9 @@ export function toolheadVals(ctx) {
   });
 
   // Derived, not assumed: this adapter has no `printing` in scope and referencing one is a
-  // ReferenceError that esbuild compiles happily and React surfaces only at render.
-  const psT = raw.print_stats || {};
-  const printingNow = psT.state === "printing" && !((raw.pause_resume || {}).is_paused);
+  // ReferenceError that esbuild compiles happily and React surfaces only at render. The same test
+  // act.home() refuses with (actions/toolhead.js isPrinting), so the title never disagrees with it.
+  const printingNow = isPrinting(raw);
   const homeBtns = HOME_BTNS.map(k => {
     const face = BTN_FACE[k] || { t: k, title: k };
     return {
@@ -145,7 +150,7 @@ export function toolheadVals(ctx) {
     };
   });
 
-  const jogRows = JOG_STEPS.map(row => {
+  const jogRows = jogSteps(st).map(row => {
     const ax = row[0], st = row[1];
     return { cells: [
       jogCell("−" + st[0], null, () => jog(ax, -st[0])),

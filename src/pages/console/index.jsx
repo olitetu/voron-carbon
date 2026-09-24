@@ -3,9 +3,11 @@
 // Everything that matters is SHARED with that panel: the same scrollback (store.log, newest first —
 // see boot.js), the same send path (src/lib/actions/console.js, which routes M112 / FIRMWARE_RESTART /
 // RESTART to their dedicated Moonraker endpoints so they still work when the gcode queue is wedged),
-// the same message cleaning (dashboard/adapters/console.js) and the same ↑/↓ history — recall goes
-// through the adapter's own loadHistory/pushHistory (`carbon.console.history`) on every keypress
-// rather than a snapshot, so a line sent from the dashboard panel is recallable here immediately.
+// the same message cleaning (dashboard/adapters/console.js: toTerminalRow is this page's row, isChatter
+// what the noise toggle hides — the touchscreen's QUIET view uses the same set) and the same ↑/↓
+// history — recall goes through the adapter's own loadHistory/pushHistory (`carbon.console.history`) on
+// every keypress rather than a snapshot, so a line sent from the dashboard panel is recallable here
+// immediately.
 //
 // What is page-only: multi-line entries stay multi-line (the panel joins them with " · " to fit one
 // row), a search box, a noise toggle, completion over the whole 367-command catalogue via caps.js
@@ -15,68 +17,36 @@ import React from "react";
 import { Panel, Btn, Chip, Label, Row, Input, Toggle, Confirm, T, mono } from "../../lib/design.jsx";
 import { S, Hv } from "../../lib/ui.js";
 import { useStore, usePersisted } from "../../lib/useStore.js";
-import { allCommands, help } from "../../lib/caps.js";
+import { allCommands, help, klipperCommand } from "../../lib/caps.js";
 import { makeConsoleActions } from "../../lib/actions/console.js";
-import { stripHtml, classify, KIND_COLOR, loadHistory, pushHistory } from "../dashboard/adapters/console.js";
+import { toTerminalRow, isChatter, KIND_COLOR, loadHistory, pushHistory } from "../dashboard/adapters/console.js";
 
 const MAX_ROWS = 500;      // rows actually rendered; the filter still runs over all 2000 the store keeps
 const MAX_SUGGEST = 10;
 const PLACEHOLDER = "send code… (try G28, PREHEAT, MMU_LOAD)";   // the design's, verbatim
 
-// What the noise toggle hides. Measured on 1000 consecutive gcode_store entries from this printer
-// while it printed:  231 `// MmuSyncFeedbackManager: …` · 124 gear-current lines that follow it ·
-// 59 M105 answers (`B:105.1 /105.0 T0:251.2 /250.0`) · 43 `// probe at …` — 46% of everything Klipper
-// said. Commands and errors are never hidden, whatever they look like.
-const NOISE_RE = new RegExp([
-  "^(?:ok\\s+)?[BCT]\\d*:\\s*-?\\d",                              // M105 answer / temperature auto-report
-  "^MmuSyncFeedbackManager:",                                     // Happy Hare sync-feedback chatter
-  "^(?:Modifying|Restoring) MMU stepper_mmu_gear run current",     // …and the current changes it makes
-  "^Run Current:",
-  "^probe at ",                                                   // QGL + bed mesh probe reports
-  "^pressure_advance:",
-].join("|"), "i");
-
 // Nothing typed here is ever refused — a console that argues is useless — but two shapes of command
 // are worth one extra keystroke. M112 always: Klipper halts mid-motion and only FIRMWARE_RESTART
 // brings it back. The job-killers only while a print is actually running, which is exactly when a
 // fat-fingered line costs eight hours. Every physical line is tested, so a pasted script cannot
-// smuggle one past the gate.
+// smuggle one past the gate. The test is on the name Klipper itself dispatches (caps.js klipperCommand,
+// gcode.py's own parse), not a regex on the raw text: `M112S1` and `N10 M112` are an M112 and `M84X`
+// is an M84, all of which a `^M112\b` / `^M84\b` test let through without the strip.
+// M112 also keeps the regex, because the send path uses it: lib/actions/console.js sends any script
+// matching /^M112\b/ to printer.emergency_stop, so `M112.5`, an unknown command to Klipper's parse, is
+// still a real e-stop from this box. The lib's restart patterns match exact names, which the parse covers.
 const ESTOP_RE = /^M112\b/i;
-const KILL_RE = /^(?:CANCEL_PRINT|RESTART|FIRMWARE_RESTART|TURN_OFF_HEATERS|SDCARD_RESET_FILE|M84|M18)\b/i;
-/** First line of `s` that matches `re`, or null — the strip names the offending line, not line one. */
-const hit = (re, s) => s.split(/\r?\n/).map(l => l.trim()).find(l => re.test(l)) || null;
-/** Its command word, so the button reads SEND CANCEL_PRINT rather than a bare SEND. */
-const head = line => (String(line).split(/\s+/)[0] || "").toUpperCase().slice(0, 24);
-
-/** HH:MM:SS — the dashboard column is HH:MM to save width; a full-height terminal can afford seconds. */
-function stamp(t) {
-  let n = Number(t);
-  if (!Number.isFinite(n) || n <= 0) return "--:--:--";
-  if (n > 1e12) n = n / 1000;                                     // tolerate ms timestamps
-  const d = new Date(n * 1000);
-  if (Number.isNaN(d.getTime())) return "--:--:--";
-  const p = x => String(x).padStart(2, "0");
-  return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
-}
-
+const KILL = new Set(["CANCEL_PRINT", "RESTART", "FIRMWARE_RESTART", "TURN_OFF_HEATERS", "SDCARD_RESET_FILE", "M84", "M18"]);
 /**
- * One store entry → { t, text, kind }, or null when there is nothing to show.
- *
- * Cleaning runs per PHYSICAL line (each line of a multi-line response carries its own `// ` / `!! `
- * marker, and Happy Hare wraps its words in <span>/<b>), but whitespace is deliberately NOT collapsed:
- * MMU_STATUS and the gate map are space-aligned tables and only survive in a pre-wrap mono column.
+ * The command name of the first physical line of `s` that `is` accepts, or null. The strip names that
+ * command (SEND CANCEL_PRINT rather than a bare SEND), from the offending line, not line one.
  */
-function toRow(entry) {
-  if (!entry || typeof entry !== "object") return null;
-  const raw = String(entry.message == null ? "" : entry.message);
-  const type = String(entry.type || "").toLowerCase();
-  const text = raw.split(/\r?\n/)
-    .map(l => stripHtml(l.replace(/^\s*(\/\/|!!)\s?/, "").replace(/^echo:\s?/i, "")).replace(/\s+$/, ""))
-    .join("\n").replace(/^\n+|\n+$/g, "");
-  if (!text.trim()) return null;
-  const kind = type === "command" ? "command" : /^\s*echo:/i.test(raw) ? "echo" : classify(entry, text);
-  return { t: stamp(entry.time), text, kind };
+function hit(is, s) {
+  for (const l of s.split(/\r?\n/)) { const n = klipperCommand(l); if (is(l.trim(), n)) return n; }
+  return null;
 }
+const isEstop = (line, name) => name === "M112" || ESTOP_RE.test(line);
+const isKill = (line, name) => KILL.has(name);
 
 /** command → accent, err/warn/ok → the dashboard's palette, `echo:` → muted, `//` → dim, response → body. */
 function lineColor(kind) {
@@ -144,10 +114,12 @@ export default function Page({ store, api }) {
     let seen = 0;
     for (let i = src.length - 1; i >= 0; i--) {          // store is newest first; a terminal reads bottom-up
       let r = null;
-      try { r = toRow(src[i]); } catch { r = null; }
+      try { r = toTerminalRow(src[i]); } catch { r = null; }
       if (!r) continue;
       seen++;
-      if (hideNoise && r.kind !== "command" && r.kind !== "err" && NOISE_RE.test(r.text)) continue;
+      // The noise set is the adapter's isChatter, shared with the touchscreen's QUIET view. Commands and
+      // errors are never hidden, whatever they look like.
+      if (hideNoise && r.kind !== "command" && r.kind !== "err" && isChatter(r.text)) continue;
       if (f && r.text.toLowerCase().indexOf(f) < 0) continue;
       out.push(r);
     }
@@ -236,9 +208,9 @@ export default function Page({ store, api }) {
   const send = text => {
     const v = String(text || "").trim();
     if (!v) return;
-    const stop = hit(ESTOP_RE, v), kill = printing ? hit(KILL_RE, v) : null;
+    const stop = hit(isEstop, v), kill = printing ? hit(isKill, v) : null;
     // The draft is deliberately left alone while the strip is up, so CANCEL gives the line back.
-    if (stop || kill) { setConfirmClear(false); setPending({ v, estop: !!stop, name: head(stop || kill) }); return; }
+    if (stop || kill) { setConfirmClear(false); setPending({ v, estop: !!stop, name: stop || kill }); return; }
     dispatch(v);
   };
 

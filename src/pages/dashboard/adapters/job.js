@@ -12,6 +12,12 @@
 // jobBarStyle, jobEta (panel header "ETA 01:32"), jobElapsed, jobTotal, jobSlicerTotal, jobRemaining, jobFile, jobThumb, jobThumbStyle,
 // saveConfigPending, saveConfigLabel, saveConfigStyle.
 import { makeJobActions } from "../../../lib/actions/job.js";
+import { makeHistoryActions } from "../../../lib/actions/history.js";
+import { thumbUrl as historyThumb, fmtSpan, fmtLen, fmtAgo, statusText as jobStatusText, statusColor as jobStatusColor,
+         numish, baseName } from "../../../lib/history.js";
+
+/** print_stats states in which a job is OVER but still parked in Klipper until SDCARD_RESET_FILE. */
+export const FINISHED_STATES = ["complete", "cancelled", "canceled", "error"];
 
 // ---- file metadata cache: one api.fileMeta per filename (module-level Map). Failures are re-tried after 60 s; a hit older
 //      than 10 min is refreshed in the background (a re-uploaded file keeps its name) while the cached copy keeps serving.
@@ -44,7 +50,6 @@ export function clearFileMeta(filename) { if (filename === undefined) META.clear
 // ---- formatting (design shows h:mm:ss with hours always present: "0:18:48", "9:37:27")
 const DASH = "—";
 const num = v => (typeof v === "number" && isFinite(v) ? v : null);
-const numish = v => num(typeof v === "string" && v.trim() !== "" ? +v : v);   // metadata fields can arrive as strings
 export function fmtHMS(sec) {
   const s = num(sec); if (s === null) return DASH;
   const t = Math.max(0, Math.round(s));
@@ -58,7 +63,6 @@ export function fmtClock12(d) {
 }
 /** "01:32" — the design's panel-header "ETA 01:32". */
 export function fmtClock24(d) { return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); }
-const baseName = f => String(f || "").split("/").pop();
 const stripGcode = f => baseName(f).replace(/\.g(code|co)?$/i, "");
 
 // ---- layer: print_stats.info when the slicer reports it, else metadata + commanded Z (CONTRACT "LAYER")
@@ -112,7 +116,7 @@ export function objectBoxes(eo, bed = BED) {
 }
 
 // ---- confirm timers (module scope: the adapter is a pure function re-run on every render)
-let cancelTimer = null, saveTimer = null;
+let cancelTimer = null, saveTimer = null, reprintTimer = null;
 const CONFIRM_MS = 6000;
 const pct1 = v => +(v * 100).toFixed(3);   // CSS % with 3 decimals
 
@@ -146,7 +150,7 @@ export function jobVals(ctx) {
   // Klipper parks the state at complete / cancelled / error and virtual_sdcard keeps the file, so the
   // panel goes on showing a job that is over. Both spellings: Klipper emits "cancelled", but the
   // OctoPrint-compat layer and some plugins report "canceled".
-  const finished = ["complete", "cancelled", "canceled", "error"].indexOf(printState) >= 0;
+  const finished = FINISHED_STATES.indexOf(printState) >= 0;
   const shutdown = klippy === "shutdown" || klippy === "error";
   const disconnected = klippy === "disconnected";
   const estop = shutdown || disconnected;   // the design's S.estop: red pulsing status + RESTART button
@@ -231,9 +235,63 @@ export function jobVals(ctx) {
   };
 
   // ---- status label (design: S.estop ? "SHUTDOWN" : printState.toUpperCase())
-  const statusLabel = !connected ? "OFFLINE" : klippy === "error" ? "ERROR" : shutdown ? "SHUTDOWN" : disconnected ? "DISCONNECTED" : klippy === "startup" ? "STARTUP" : printState.toUpperCase();
-  const statusColor = estop || printState === "error" ? "#ff5a33" : printing ? "#3ddcc4" : paused ? "#f0b429" : "#6b7789";
-  const statusDot = estop || printState === "error" ? "#ff5a33" : printing ? "#3ddcc4" : paused ? "#f0b429" : "#4d5a6b";
+  // A finished job reads as STANDBY — exactly what CLEAR (SDCARD_RESET_FILE) would produce, but without sending
+  // anything: the outcome now lives on the first LATEST PRINTS row, so the top bar no longer says COMPLETE
+  // forever. Klippy-level failures (SHUTDOWN, ERROR) are unaffected.
+  const shownState = finished ? "standby" : printState;
+  const statusLabel = !connected ? "OFFLINE" : klippy === "error" ? "ERROR" : shutdown ? "SHUTDOWN" : disconnected ? "DISCONNECTED" : klippy === "startup" ? "STARTUP" : shownState.toUpperCase();
+  const statusColor = estop ? "#ff5a33" : printing ? "#3ddcc4" : paused ? "#f0b429" : "#6b7789";
+  const statusDot = estop ? "#ff5a33" : printing ? "#3ddcc4" : paused ? "#f0b429" : "#4d5a6b";
+
+  // ---- LATEST PRINTS: the card's body once nothing is running (finished, standby, or never started). The job
+  //      that just ended is the first row, with its real outcome — the history database is the source of truth
+  //      for "how did it go", not print_stats, which only remembers the last state it was in.
+  const idle = !active;
+  const recentJobs = Array.isArray(st.recentJobs) ? st.recentJobs : null;
+  const hist = makeHistoryActions({ api, store: ctx.store || { state: st }, log });
+  const canPrint = klippy === "ready" && connected;
+  const armReprint = key => {
+    clearTimeout(reprintTimer);
+    set({ confirmReprint: key });
+    reprintTimer = setTimeout(() => set({ confirmReprint: null }), CONFIRM_MS);
+  };
+  // Orca re-uploads a re-slice under the SAME name, and Moonraker then marks the older rows exists:false. Those
+  // files were replaced, not deleted — and REPRINT on the newest row prints the current version.
+  const liveNames = new Set((recentJobs || []).filter(j => j.exists).map(j => j.name));
+  const recentPrints = (recentJobs || []).map(j => {
+    const pending = ui.confirmReprint === j.key;
+    const col = jobStatusColor(j.status);
+    // A job cancelled before it started has 0 s and 0 mm: say nothing rather than "0m".
+    const bits = [j.dur ? fmtSpan(j.dur) : null, j.fil ? fmtLen(j.fil) : null, fmtAgo(j.end !== null ? j.end : j.start)].filter(Boolean);
+    const reprintable = j.exists && canPrint;
+    return {
+      key: j.key,
+      name: j.base || j.name,
+      title: j.name + (j.exists ? "" : liveNames.has(j.name) ? " — re-uploaded since; REPRINT on the newer row prints the current version" : " — the g-code file has since been deleted"),
+      thumb: historyThumb(api, j, 48),
+      meta: bits.join(" · "),
+      status: jobStatusText(j.status),
+      reprint: reprintable ? () => {
+        if (!pending) { armReprint(j.key); log("Reprint " + j.name + "? Click CONFIRM? within 6 s", "warn"); return; }
+        clearTimeout(reprintTimer); set({ confirmReprint: null }); hist.reprint(j.name);
+      } : null,
+      reprintLabel: pending ? "CONFIRM?" : "REPRINT",
+      reprintTitle: pending ? "Starts printing " + j.name + " immediately" : "Print " + j.name + " again",
+      gone: !j.exists,
+      goneLabel: liveNames.has(j.name) ? "REPLACED" : "FILE DELETED",
+      rowStyle: "display:flex; align-items:center; gap:10px; height:50px; padding:0 12px; box-sizing:border-box; border-bottom:1px solid #161d27",
+      thumbBoxStyle: "width:38px; height:38px; flex:none; border-radius:3px; overflow:hidden; border:1px solid #161d27; background:repeating-linear-gradient(135deg,#0a0e14 0px,#0a0e14 5px,#0c1119 5px,#0c1119 10px)",
+      thumbStyle: "width:100%; height:100%; object-fit:cover; opacity:.9; display:block",
+      nameStyle: "font-size:12px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:" + (j.exists ? "#e8eef6" : "#6b7789"),
+      metaStyle: "font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:.04em; color:#6b7789; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap",
+      sideStyle: "flex:none; display:flex; flex-direction:column; align-items:flex-end; gap:4px",
+      statusStyle: "font-family:'JetBrains Mono',monospace; font-size:8.5px; letter-spacing:.1em; color:" + col,
+      reprintStyle: "font-family:'JetBrains Mono',monospace; font-size:8.5px; letter-spacing:.1em; padding:2px 7px; border-radius:3px; cursor:pointer; border:1px solid " +
+        (pending ? "#f0b429" : "#1c2430") + "; color:" + (pending ? "#f0b429" : "#8b98aa") + "; background:" + (pending ? "#14100a" : "transparent") + press,
+      goneStyle: "font-family:'JetBrains Mono',monospace; font-size:8px; letter-spacing:.08em; color:#3d4859",
+    };
+  });
+  const recentEmpty = recentJobs === null ? (connected ? "LOADING HISTORY…" : "NOT CONNECTED") : recentPrints.length ? "" : "NO PRINTS YET";
 
   // The tile is 77 px wide and the value renders at 13 px mono (7.8 px/char), so 10+ characters wrap onto a
   // second line and break the row — which is exactly what "12.4 mm³/s" does, and flow hits double digits
@@ -258,6 +316,17 @@ export function jobVals(ctx) {
   const progressOrZero = progress === null ? 0 : progress;
 
   return {
+    // ---- LATEST PRINTS (the card's body while nothing is running)
+    jobIdle: idle,
+    jobPanelTitle: idle ? "LATEST PRINTS" : "CURRENT JOB",
+    recentPrints,
+    recentEmpty,
+    recentEmptyStyle: "height:250px; display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.14em; color:#3d4859",
+    recentListStyle: "min-height:250px",
+    recentAll: () => (typeof ctx.navigate === "function" ? ctx.navigate("/history") : null),
+    recentAllLabel: "ALL HISTORY \u2192",
+    recentAllStyle: "padding:9px 0; text-align:center; font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.1em; color:#8b98aa; background:#0d121a; border-top:1px solid #161d27; cursor:pointer" + press,
+
     // ---- CURRENT JOB
     jobStats: [
       stat("SPEED", liveVel === null ? null : String(Math.round(liveVel)), "mm/s"),
@@ -291,7 +360,7 @@ export function jobVals(ctx) {
     jobTotal: fmtHMS(totalDur),
     jobSlicerTotal: fmtHMS(slicerTotal),
     jobRemaining: remaining === null ? DASH : fmtHMS(remaining),
-    jobEta: "ETA " + (etaDate ? fmtClock24(etaDate) : DASH),          // panel header "ETA 01:32"
+    jobEta: idle ? "" : "ETA " + (etaDate ? fmtClock24(etaDate) : DASH),   // panel header "ETA 01:32"; nothing to estimate when idle
     jobProgressPct: pct === null ? DASH : String(pct),                 // "50" (the "%" is its own span in the template)
     jobProgress: progressOrZero,                                        // 0..1
     jobRingDash: C.toFixed(1),                                          // strokeDasharray (circumference, "270.2")

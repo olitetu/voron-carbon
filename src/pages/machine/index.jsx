@@ -5,20 +5,15 @@ import { Panel, Btn, Chip, Label, Val, Row, Divider, Table, Confirm,
          T, mono, fmtBytes, fmtDate } from "../../lib/design.jsx";
 import { S, Hv } from "../../lib/ui.js";
 import { useStore, useAsync, usePersisted } from "../../lib/useStore.js";
-import { makeMachineActions, throttleSummary, fmtUptime, isPrintActive, KLIPPER_SERVICES } from "../../lib/actions/machine.js";
+import { makeMachineActions, throttleSummary, fmtUptime, isPrintActive, KLIPPER_SERVICES,
+         KLIPPER_STATS_INTERVAL, RT_WARN, RT_BAD, updateOrder, unknownVersion, behindOf, canExpand,
+         repoRecovery, repoFlags, failedRecovery, recoveryNotes, recoverText } from "../../lib/actions/machine.js";
+import { num } from "../../lib/spools.js";
 
-const KLIPPER_STATS_INTERVAL = 5;   // s — the window `mcu_awake` is measured over
-
-// bytes_retransmit is a BYTE count, not a packet count, and every link re-sends a handful of bytes
-// just establishing itself (measured on this printer with nothing wrong with it: 9 B on `mcu`, 9 B on
-// `mcu mmu`, 0 elsewhere). Warning at >0 therefore painted a permanent yellow "18 B RETRANSMITTED"
-// header on a healthy machine — a crying-wolf alarm. Kilobytes are the point at which a CAN/USB link
-// is actually losing data, which is what the per-MCU note already said.
-const RT_WARN = 1024, RT_BAD = 65536;
+// RT_WARN / RT_BAD: why a few re-sent bytes are not an alarm is documented where they live.
 const rtTone = b => (b === null ? T.ghost : b >= RT_BAD ? T.err : b >= RT_WARN ? T.warn : T.mute);
 
 const DASH = "—";
-const num = v => (typeof v === "number" && isFinite(v) ? v : null);
 // boot() opens the websocket asynchronously, so every RPC issued on the first render of a cold load
 // rejects with "not connected". Staying pending until st.connected turns true keeps the panels in
 // their loading state instead of latching that error, and the flag is a dependency so they refetch
@@ -340,41 +335,16 @@ function PowerPanel({ act, printing, klippy }) {
 // ---------------------------------------------------------------------------------------------
 // UPDATES
 // ---------------------------------------------------------------------------------------------
-/** Moonraker orders version_info by config order; pin the two that matter to the top, system last. */
-function updateOrder(a, b) {
-  const rank = n => (n === "klipper" ? 0 : n === "moonraker" ? 1 : n === "system" ? 3 : 2);
-  return rank(a) - rank(b) || a.localeCompare(b);
-}
-
-/** Moonraker writes "?" for a version it could not determine — rate limited, offline, or an invalid repo. */
-const unknownVersion = v => !v || v === "?";
-
-/**
- * How far behind a component is, in whatever unit it counts in (commits, or apt packages).
- * null = Moonraker does not know, which is NOT the same as "up to date": a `web` client whose remote
- * version came back "?" used to compare "v2.17.0" against "?", conclude 1 behind, and offer an UPDATE
- * button whose confirm read "Update mainsail to ?".
- */
-function behindOf(v) {
-  if (v.configured_type === "system") return num(v.package_count) || 0;
-  const c = num(v.commits_behind_count);
-  if (c !== null) return c;
-  if (unknownVersion(v.version) || unknownVersion(v.remote_version)) return null;
-  return v.version !== v.remote_version ? 1 : 0;   // `web` clients count no commits, only the two strings
-}
-
-/**
- * Is there a list behind the BEHIND badge? `system` has package_list and a git repo has
- * commits_behind; a `web` client has neither — its "1" is "an update exists", not one commit, and
- * opening it produced a panel headed "COMMITS BEHIND" apologising that nothing was cached.
- */
-const canExpand = v => v.configured_type === "system" || v.configured_type === "git_repo" || Array.isArray(v.commits_behind);
-
+// updateOrder, behindOf, canExpand and the recovery model (repoRecovery, recoverText, …) live in
+// lib/actions/machine.js, shared with the touchscreen's UPDATES and SYSTEM screens.
 function UpdatesPanel({ api, act, printing, connected, serverInfo }) {
   const s = useAsync(() => (api && connected ? api.updateStatus(false) : PENDING), [api, connected]);
   const [expanded, setExpanded] = usePersisted("machine.upExpand", null);
   const [confirm, setConfirm] = React.useState(null);
   const [feed, setFeed] = React.useState([]);
+  // Repos Moonraker has already tried (and failed) to reset from here: only these, or a `corrupt` one, get
+  // HARD RECOVER. Component state on purpose — leaving the page forgets it, which hides HARD again.
+  const [tried, setTried] = React.useState(() => new Set());
   const reload = s.reload;
 
   // Moonraker narrates updates over the socket and pushes a full status after a refresh; both are
@@ -385,6 +355,9 @@ function UpdatesPanel({ api, act, printing, connected, serverInfo }) {
       api.on("notify_update_response", d => {
         const line = String((d && d.message) || "").trim();
         if (line) setFeed(f => f.concat(line).slice(-60));
+        // A recovery Moonraker really ran and that failed (not a refusal, not a dropped socket).
+        const failed = failedRecovery(d);
+        if (failed) setTried(t => (t.has(failed) ? t : new Set(t).add(failed)));
         if (d && d.complete) reload();
       }),
       api.on("update_refreshed", () => reload()),
@@ -432,12 +405,8 @@ function UpdatesPanel({ api, act, printing, connected, serverInfo }) {
         style={`${badge}; cursor:pointer`} hover={`border-color:${T.warn}`}>{b + (r.configured_type === "system" ? " PKG" : " ⟩")}</Hv>;
     } },
     { k: "flags", label: "STATE", w: "minmax(150px,1fr)", render: r => {
-      const bad = [];
-      if (r.is_dirty) bad.push(["DIRTY", T.warn]);
-      if (r.is_valid === false) bad.push(["INVALID", T.err]);
-      if (r.corrupt) bad.push(["CORRUPT", T.err]);
-      if (r.detached) bad.push(["DETACHED", T.warn]);
-      if (r.channel_invalid) bad.push(["BAD CHANNEL", T.err]);
+      // Most specific first (CORRUPT, DIRTY, DETACHED, DIVERGED, INVALID…), the touchscreen's order.
+      const bad = repoFlags(r).map(([t, k]) => [t, k === "err" ? T.err : T.warn]);
       if (r.debug_enabled) bad.push(["DEBUG", T.info]);
       // Six flags need ~390 px in a ~150 px cell and a flex row does not ellipsise, so the tail is cut
       // with nothing to show for it — the title is the only way to read CORRUPT off a clipped row.
@@ -454,20 +423,32 @@ function UpdatesPanel({ api, act, printing, connected, serverInfo }) {
     } },
     { k: "act", label: "", w: "180px", align: "right", render: r => {
       const b = behindOf(r);
-      const broken = !!(r.is_dirty || r.corrupt || r.is_valid === false);
-      // This printer keeps Happy Hare's files untracked INSIDE the klipper and moonraker checkouts;
-      // a hard recover re-clones and deletes exactly those. Moonraker already names them in
-      // `anomalies`, so put them in the dialog rather than behind a hover on another column.
-      const notes = [].concat(r.anomalies || [], r.warnings || []).filter(Boolean);
-      // Confirm renders one plain line, so join with a separator rather than newlines.
-      const recoverText = `Recover ${r.name}? A hard recovery re-clones the repo and throws away every local change to it.`
-        + (notes.length ? " Moonraker reports: " + notes.join(" · ") : "");
+      const rec = repoRecovery(r, tried.has(r.name));
+      if (rec.soft || rec.hard) {
+        // GitDeploy.update() aborts on a dirty or invalid repo, so on a broken one RECOVER replaces UPDATE.
+        // Which RECOVER is repoRecovery's call, never a re-clone by default: this button used to send
+        // hard=true for any flagged repo, but a bare is_valid:false is also what ONE failed fetch leaves
+        // behind, and a hard recover of klipper or moonraker deletes Happy Hare's untracked files (the MMU
+        // stops working). HARD is offered for `corrupt`, or once Moonraker's own soft reset has failed.
+        // The confirms (recoverText) name Happy Hare's files even when `anomalies` lists none.
+        const advice = ((recoveryNotes(r.name, r, tried.has(r.name))[0]) || [])[1];
+        const noClone = rec.noClone ? "Moonraker has no recovery URL for this repo, so it cannot re-clone it" : null;
+        return <Row gap={4} style="justify-content:flex-end">
+          {rec.soft && <Btn small kind="warn" disabled={busy || printing} title={advice}
+            onClick={() => ask(recoverText(r.name, r, false), "RECOVER", () => act.recoverUpdate(r.name, false).then(reload))}>RECOVER</Btn>}
+          {rec.hard && <Btn small kind="danger" disabled={busy || printing || !!noClone} title={noClone || advice}
+            onClick={() => ask(recoverText(r.name, r, true), "HARD RECOVER", () => act.recoverUpdate(r.name, true).then(reload))}>HARD RECOVER</Btn>}
+        </Row>;
+      }
       const target = r.configured_type === "system" ? "the latest packages" : (unknownVersion(r.remote_version) ? "the latest release" : r.remote_version);
+      // A healthy git repo, or not a git repo at all (Moonraker's recover takes git repos only, hence no
+      // RECOVER). A non-git component that reads is_valid:false is refused as well: a `web` client's update
+      // aborts with "Invalid install detected" (net_deploy.py). The touchscreen disables it the same way.
+      const invalid = r.is_valid === false;
       return <Row gap={4} style="justify-content:flex-end">
-        {broken && <Btn small kind="warn" disabled={busy || printing}
-          onClick={() => ask(recoverText, "RECOVER", () => act.recoverUpdate(r.name, true).then(reload))}>RECOVER</Btn>}
         {b > 0
-          ? <Btn small kind="accent" disabled={busy || printing}
+          ? <Btn small kind="accent" disabled={busy || printing || invalid}
+              title={invalid ? "Moonraker reports this component invalid and will not update it" : undefined}
               onClick={() => ask(`Update ${r.name} to ${target}? It restarts once the update finishes.`, "UPDATE", () => act.runUpdate(r.name).then(reload))}>UPDATE</Btn>
           : b === null
             ? <span title="Nothing to compare against — this is not a claim that it is current"><Val size={9.5} color={T.mute}>UNKNOWN</Val></span>
@@ -493,6 +474,9 @@ function UpdatesPanel({ api, act, printing, connected, serverInfo }) {
   const warnings = (serverInfo && Array.isArray(serverInfo.warnings) ? serverInfo.warnings : [])
     .filter(w => /update_manager/i.test(String(w)));
   const failed = (serverInfo && Array.isArray(serverInfo.failed_components) ? serverInfo.failed_components : []);
+  // A flagged git repo gets its advice spelled out above the table: which RECOVER is safe, and why REFRESH
+  // comes first when Moonraker reports nothing a reset would fix. Nothing is shown while every repo is valid.
+  const brokenRepos = rows.filter(r => { const x = repoRecovery(r); return x.git && x.broken; });
 
   return <Panel title="UPDATE MANAGER" accent={pending ? T.warn : T.ok} flat
     right={<Row gap={6}>
@@ -501,7 +485,10 @@ function UpdatesPanel({ api, act, printing, connected, serverInfo }) {
       {/* Moonraker answers machine.update.refresh with a 503 while Klippy prints, so the button says so up front. */}
       <Btn small onClick={() => { setFeed([]); fire(act.refreshUpdates()); }} disabled={busy || printing}
         title={printing ? "Refused while printing — Moonraker will not refresh mid-print" : "Re-checks every repo against GitHub — slow, and rate limited"}>REFRESH</Btn>
-      <Btn small kind="accent" disabled={busy || printing || !pending}
+      {/* machine.update.full walks every component in order and ABORTS at the first repo it cannot update, leaving
+          the rest half-done. So with a broken repo the per-row UPDATE buttons are the way; this one says why not. */}
+      <Btn small kind="accent" disabled={busy || printing || !pending || brokenRepos.length > 0}
+        title={brokenRepos.length ? "Refused — " + brokenRepos.map(r => r.name).join(", ") + " needs RECOVER first; a full update would stop there half-done. Update the other rows one by one." : undefined}
         onClick={() => ask(`Update all ${pending} outdated components? Every one of them restarts what it patched.`, "UPDATE ALL", () => act.updateAll().then(reload))}>UPDATE ALL</Btn>
     </Row>}>
     <div style={S("padding:8px 10px")}>
@@ -518,6 +505,11 @@ function UpdatesPanel({ api, act, printing, connected, serverInfo }) {
         {warnings.length > 3 && <div title={warnings.slice(3).join("\n\n")} style={S(`${mono(9.5, `color:${T.mute}`)}; margin-top:5px; cursor:default`)}>{"+" + (warnings.length - 3) + " more"}</div>}
         <div style={S(`font-size:11px; color:${T.dim}; margin-top:6px; text-wrap:pretty`)}>A component that failed to load is not in the table below and is never updated.</div>
       </div>}
+      {brokenRepos.map(r => <div key={r.name} style={S("border:1px solid #4a2318; background:#1a0e09; border-radius:4px; padding:7px 9px; margin:2px 0 9px; min-width:0; overflow-wrap:anywhere")}>
+        <Label style={`color:${T.err}`}>{r.name.toUpperCase() + " — " + repoFlags(r).map(([t]) => t).join(" · ")}</Label>
+        {recoveryNotes(r.name, r, tried.has(r.name)).map(([k, t], i) =>
+          <div key={i} style={S(`font-size:11px; color:${k === "err" ? T.body : k === "warn" ? T.warn : T.dim}; margin-top:5px; line-height:1.5; text-wrap:pretty`)}>{t}</div>)}
+      </div>)}
       <Wide min={886}>
         <Table cols={cols} rows={rows} rowKey={r => r.name}
           empty={s.loading ? (connected ? "Loading update status…" : "Waiting for the printer…") : "Update manager reported nothing"} />

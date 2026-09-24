@@ -99,10 +99,9 @@ export default function Page({ store, api }) {
     store.set({ activeSpool: id });
     const sp = id ? byId[id] : null;
     try {
-      // Moonraker runs spool_id through int(), so an explicit null is a 400 ("unable to convert
-      // argument") — clearing means sending the request with no spool_id at all, which its handler
-      // defaults to None. api.spoolmanSetActive always sends the key, hence the raw rpc here.
-      await (id == null ? api.rpc("server.spoolman.post_spool_id", {}) : api.spoolmanSetActive(id));
+      // Clearing must send NO spool_id (an explicit null is a 400); api.spoolmanClearActive does exactly that,
+      // and says why, in moonraker.js.
+      await (id == null ? api.spoolmanClearActive() : api.spoolmanSetActive(id));
       // Logged AFTER the round-trip. The store update above is optimistic and self-corrects, but the
       // console is a permanent record: announcing the swap up front left a green "active spool → #35"
       // line standing in the log even when the call failed and the change was rolled back.
