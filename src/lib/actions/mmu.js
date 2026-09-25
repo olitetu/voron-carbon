@@ -211,11 +211,14 @@ export function makeMmuActions({ api, store, log } = {}) {
       + (l === null ? " from sensors" : l ? ", asserting filament IS loaded" : ", asserting filament is NOT loaded"), "warn");
     return run(cmd, "MMU state recovered");
   }
+  // Happy Hare v3 resets only with CONFIRM=1; a bare MMU_RESET prints how to and changes nothing, so this used
+  // to report "MMU state reset" for a reset that never happened. The desktop has no confirm to put in front of a
+  // one-tap wipe of the gate map, so it points at the console instead of sending anything.
   async function mmuReset() {
     if (blocked()) return false;
     if (printingNow()) { say("Refused — MMU_RESET while printing", "warn"); return false; }
-    say("MMU_RESET — clearing persisted MMU state (gate map, TTG map, statistics)", "warn");
-    return run("MMU_RESET", "MMU state reset");
+    say("Reset MMU forgets the gate map, TTG map, endless-spool groups and statistics. To do it, send MMU_RESET CONFIRM=1 from the console.", "warn");
+    return false;
   }
   /**
    * The design's CUT button — a real cut on this printer.

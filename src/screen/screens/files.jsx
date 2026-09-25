@@ -105,7 +105,7 @@ export default function Files({ st, api, act, say }) {
   const slice = sorted.slice(first, first + count);
 
   const startPrint = f => setConfirm({
-    label: "START PRINT", cmd: `SDCARD_PRINT_FILE ${fname(f)}`, guards: { whilePrinting: false },
+    label: "START PRINT", cmd: `printer.print.start filename=${fname(f)}`, guards: { whilePrinting: false },
     confirm: `Print ${fname(f).replace(/\.gcode$/i, "")}? ${fmtDur(f.estimated_time)} estimated, ${f.filament_weight_total ? Math.round(f.filament_weight_total) + " g" : "unknown filament"}.`,
     run: () => api.startPrint(fname(f)).then(() => say("printing " + fname(f))).catch(e => act.refuse("START PRINT", e.message)),
   });

@@ -742,7 +742,8 @@ export function mmuVals(ctx) {
     // "Edit gate map" opens the in-app gate editor for the SELECTED gate. It used to dispatch GATE_MAP,
     // which opened Mainsail's MMU panel in a new tab — dead inside Orca's webview, and a dependency on
     // the app Carbon is meant to replace. Same dialog as the spool cards' edit button: one implementation.
-    mmuMenu: [["Recover state", "MMU_RECOVER"], ["Reset MMU", "MMU_RESET"], ["Edit gate map", "GATE_EDITOR"], ["Calibrate gates", "CHECK_GATE"], ["Filament stats", "STATS"], ["MMU settings", "SETTINGS"]].map(row => ({
+    // No "Reset MMU": Happy Hare needs CONFIRM=1 and this menu has no confirm; the console does it deliberately.
+    mmuMenu: [["Recover state", "MMU_RECOVER"], ["Edit gate map", "GATE_EDITOR"], ["Calibrate gates", "CHECK_GATE"], ["Filament stats", "STATS"], ["MMU settings", "SETTINGS"]].map(row => ({
       t: row[0],
       go: () => {
         set({ mmuMenuOpen: false });

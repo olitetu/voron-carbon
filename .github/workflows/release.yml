@@ -65,7 +65,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.version }}
-          name: ${{ inputs.version }}          # MUST equal the tag — Moonraker compares the NAME
+          name: ${{ inputs.version }}          # MUST equal the tag: Moonraker 0.11+ compares tag_name (falls back to name); keep both equal
           prerelease: ${{ inputs.prerelease }}
           files: voron-carbon.zip              # exactly ONE asset; Moonraker takes assets[0] otherwise
           generate_release_notes: true

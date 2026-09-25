@@ -489,7 +489,7 @@ function UpdatesPanel({ api, act, printing, connected, serverInfo }) {
           the rest half-done. So with a broken repo the per-row UPDATE buttons are the way; this one says why not. */}
       <Btn small kind="accent" disabled={busy || printing || !pending || brokenRepos.length > 0}
         title={brokenRepos.length ? "Refused — " + brokenRepos.map(r => r.name).join(", ") + " needs RECOVER first; a full update would stop there half-done. Update the other rows one by one." : undefined}
-        onClick={() => ask(`Update all ${pending} outdated components? Every one of them restarts what it patched.`, "UPDATE ALL", () => act.updateAll().then(reload))}>UPDATE ALL</Btn>
+        onClick={() => ask(`Update all ${pending} outdated components in Moonraker's order? It runs apt FIRST (kernel, Xorg, mesa, nginx: reboot afterwards), then every client. KlipperScreen's restart takes the 7" panel from Carbon right after apt (back with: sudo systemctl reset-failed carbon-kiosk; sudo systemctl enable --now carbon-kiosk && sudo systemctl disable KlipperScreen). Then Klipper, then Moonraker last. It stops at the first component that fails. Updating row by row is safer.`, "UPDATE ALL", () => act.updateAll().then(reload))}>UPDATE ALL</Btn>
     </Row>}>
     <div style={S("padding:8px 10px")}>
       {printing && <div style={S(`${mono(10, `color:${T.warn}`)}; padding:4px 2px 10px; line-height:1.5`)}>A print is running — updates are refused until it finishes.</div>}

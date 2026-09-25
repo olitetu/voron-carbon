@@ -187,7 +187,7 @@ const base = p => String(p).split("/").pop();
 /** Where Happy Hare sits untracked on THIS printer, including the mmu/ package Moonraker never lists.
  *  Used when a damaged checkout reports no untracked list of its own: an empty list is not "no HH here". */
 export const HH_HOME = {
-  klipper: "klippy/extras/mmu_*.py and the klippy/extras/mmu package",
+  klipper: "klippy/extras/mmu_*.py and the klippy/extras/mmu package, plus Cartographer's idm.py, cartographer.py and scanner.py links (hidden by .git/info/exclude)",
   moonraker: "moonraker/components/mmu_server.py",
 };
 
@@ -196,7 +196,9 @@ export const HH_HOME = {
 const RESTARTS = {
   klipper: "Klipper restarts — heaters off, axes unhomed",
   moonraker: "Moonraker restarts — the connection drops and reconnects by itself",
-  KlipperScreen: "KlipperScreen.service restarts",
+  // managed_services STARTS the unit even though the kiosk cutover left it disabled, and Conflicts= then
+  // stops carbon-kiosk. Every UPDATE or RECOVER of KlipperScreen hands it the panel.
+  KlipperScreen: "KlipperScreen.service restarts. It STARTS even though it is disabled and takes the 7\" panel from Carbon (Conflicts=). Bring Carbon back: sudo systemctl reset-failed carbon-kiosk; sudo systemctl enable --now carbon-kiosk && sudo systemctl disable KlipperScreen",
   "happy-hare": "Klipper restarts — heaters off, axes unhomed",
   "Klipper-Adaptive-Meshing-Purging": "Klipper restarts — heaters off, axes unhomed",
   cartographer: "Klipper restarts — heaters off, axes unhomed",
@@ -282,6 +284,13 @@ export function recoveryNotes(name, v, tried = false) {
 }
 
 /** The RECOVER confirm, soft or hard. The hard one always names Happy Hare's files for klipper / moonraker. */
+// What to run over SSH after a HARD recover re-cloned the checkout: the re-clone deletes the untracked files.
+const REINSTALL = {
+  klipper: " Afterwards run ~/cartographer-klipper/install.sh, then ~/Happy-Hare/install.sh -z.",
+  moonraker: " Afterwards run ~/Happy-Hare/install.sh -z, then sudo systemctl restart moonraker.",
+  KlipperScreen: " This also deletes the voron-carbon theme in styles/ (Moonraker lists only .py/.c/.cpp).",
+};
+
 export function recoverText(name, v, hard) {
   const r = v || {}, rec = repoRecovery(r);
   const restart = restartOf(name);
@@ -300,13 +309,13 @@ export function recoverText(name, v, hard) {
   const hhWhat = hh.length
     ? `Happy Hare's ${hh.map(base).join(", ")}${name === "klipper" ? ", plus its klippy/extras/mmu package, which Moonraker does not list" : ""}`
     : HH_HOME[name] ? `Happy Hare's ${HH_HOME[name]} — Moonraker lists none of them right now, but this printer keeps them there` : "";
-  if (!hhWhat) return `${t}${untracked.length ? ` — ${untracked.map(base).join(", ")}` : ""}. Then ${restart}.`;
+  if (!hhWhat) return `${t}${untracked.length ? ` — ${untracked.map(base).join(", ")}` : ""}. Then ${restart}.${REINSTALL[name] || ""}`;
   // Name the other untracked files as well: the confirm is the last place anyone reads what is deleted.
   const rest = untracked.filter(p => !isHappyHareFile(p)).map(base);
   const after = name === "klipper" ? "Klipper then restarts and will not get past this printer's [mmu] config"
     : name === "moonraker" ? "Moonraker then restarts without Happy Hare's mmu_server component"
     : `Then ${restart}, and the MMU stops working`;
-  return `${t} — ${rest.length ? `${rest.join(", ")} and ` : "including "}${hhWhat}. ${after} until Happy Hare's installer is re-run over SSH.`;
+  return `${t} — ${rest.length ? `${rest.join(", ")} and ` : "including "}${hhWhat}. ${after} until Happy Hare's installer is re-run over SSH.${REINSTALL[name] || ""}`;
 }
 
 /** "mmu/mmu_hardware.cfg" → { dir: "mmu", name: "mmu_hardware.cfg" } — the two halves the upload endpoint wants. */
