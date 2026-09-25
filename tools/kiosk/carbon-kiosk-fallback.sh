@@ -17,8 +17,11 @@
 #   - KlipperScreen was started on purpose (Conflicts= stopped the kiosk): KlipperScreen
 #     is active -> nothing to do.
 #   - the machine is shutting down -> nothing to do (a start would be refused anyway).
-# A deliberate `systemctl stop` normally does not get here at all: xinit exits 0 after
-# a caught SIGTERM, which systemd records as success, and OnFailure= does not fire.
+# Every stop gets here: bookworm's xinit 1.4.0 exits 1 after a caught SIGTERM
+# ("unexpected signal 15"), so systemd records a failure and OnFailure= fires.
+# left_alone() below is what keeps a restart, a stop followed by a start, or a
+# KlipperScreen handover from doing anything. A bare stop that nothing follows
+# within ~10 s ends like a kiosk that gave up: KlipperScreen takes the panel.
 #
 # It waits ~10 s before acting, so a stop followed by a start (two commands, or the
 # installer's swap) is not mistaken for a kiosk that gave up.

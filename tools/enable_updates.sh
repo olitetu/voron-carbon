@@ -5,11 +5,9 @@
 # Registers Carbon with Moonraker's update_manager, so the UI can be updated AND
 # ROLLED BACK from the printer itself.
 #
-# WHY THIS IS A CUTOVER PREREQUISITE
-#     Once KlipperScreen is disabled, this panel is the only local UI on the
-#     machine. If a bad Carbon build lands and there is no update path, fixing it
-#     means SSH — and on this printer SSH runs over the only wifi interface. Wire
-#     the update path BEFORE you take the old panel away, not after.
+# DEFERRED: THE PANEL CUTOVER SHIPPED 2026-09-24 WITHOUT THIS
+#     KlipperScreen stays installed as the automatic fallback (docs/CUTOVER.md).
+#     This still gives Carbon an update and rollback path from the printer itself.
 #
 # THE TWO THINGS THAT MAKE IT FAIL, BOTH LEARNED THE HARD WAY
 #     1. The served root may not be inside a git checkout. `type: web` replaces the
@@ -42,7 +40,7 @@ while [ $# -gt 0 ]; do
     --repo)     REPO="${2:?}"; shift 2 ;;
     --relocate) RELOCATE="${2:?}"; shift 2 ;;
     --apply)    APPLY=1; shift ;;
-    -h|--help)  sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -55,8 +53,11 @@ in_git_repo() { git -C "${1:?}" rev-parse --show-toplevel 2>/dev/null; }
 
 # ── 1. where is Carbon actually served from? ────────────────────────────────────
 command -v nginx >/dev/null || fail "nginx not found — run this on the printer."
-ROOT="$(sudo nginx -T 2>/dev/null | awk -v p="listen $PORT" '
-  $0 ~ p {inblk=1} inblk && $1=="root" {gsub(/;/,"",$2); print $2; exit}')"
+# Two steps, not one pipe: under pipefail, awk's early exit (or nginx -T
+# failing) would end the script right here, silently, inside the assignment.
+NGX="$(sudo nginx -T 2>/dev/null || true)"
+ROOT="$(printf '%s\n' "$NGX" | awk -v p="listen $PORT" '
+  $0 ~ p {inblk=1} inblk && $1=="root" {gsub(/;/,"",$2); print $2; exit}' || true)"
 [ -n "$ROOT" ] || fail "Could not find a server block listening on $PORT in the running nginx config."
 say "served root : $ROOT"
 [ -d "$ROOT" ] || fail "$ROOT does not exist."

@@ -5,10 +5,10 @@
 # Writes the version file Moonraker's update_manager reads to decide whether an update is available.
 # Run against a built dist/ just before zipping it.
 #
-# Moonraker compares the GitHub release's NAME to the `version` field here. If they ever disagree the
-# printer either never sees the update or offers the same one forever — so the release name, the git
-# tag and this value must all be the same string. tools/release.sh enforces that; if you build a
-# release by hand, you are the one enforcing it.
+# Moonraker 0.11+ compares the GitHub release's tag_name (falls back to name) to the `version` field
+# here; keep both equal. If they ever disagree the printer either never sees the update or offers the
+# same one forever — so the release name, the git tag and this value must all be the same string.
+# tools/release.sh enforces that; if you build a release by hand, you are the one enforcing it.
 set -euo pipefail
 
 VERSION="${1:?usage: stamp_release_info.sh <version> [dist-dir]}"

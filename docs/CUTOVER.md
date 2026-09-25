@@ -308,14 +308,15 @@ sudo carbon-panel-rollback                 # KlipperScreen repaints on the panel
 in, `sudo carbon-panel-rollback`, confirm KlipperScreen repaints (Ctrl+Alt+F and the
 VT number on the card if it does not take the screen), then the come-back line.
 
-**3. A deliberate restart keeps Carbon.** A clean stop is a success for systemd, so
-`OnFailure=` normally does not fire at all. If it does (the stop half failed), the
-fallback sees the restart still under way and leaves the panel alone:
+**3. A deliberate restart keeps Carbon.** Bookworm's xinit 1.4.0 exits 1 after a
+caught SIGTERM, so every stop leaves carbon-kiosk failed and fires `OnFailure=`. The
+fallback sees the restart still under way, or KlipperScreen active, and leaves the
+panel alone:
 
 ```bash
 sudo systemctl restart carbon-kiosk        # Carbon comes back, NOT KlipperScreen
 systemctl show -p NRestarts carbon-kiosk   # 0 (a manual restart is not counted here)
-journalctl -t carbon-kiosk -n 3            # usually nothing new; at most "... coming back up: panel left alone"
+journalctl -t carbon-kiosk -n 3            # one "... coming back up: panel left alone" line
 ```
 
 Once more from MACHINE → services → carbon-kiosk (Moonraker reads
@@ -367,20 +368,20 @@ A reboot passes with a warm cache and a settled network. Only the cold boot
 catches ordering bugs against nginx, Moonraker and a wifi association that has not
 completed yet.
 
-**KlipperScreen updates.** Updating KlipperScreen through Moonraker restarts
-`KlipperScreen.service`, and Conflicts= then gives it the panel and stops Carbon.
-KlipperScreen being active is exactly the case the fallback leaves alone, so nothing
-brings Carbon back before a reboot. Update
-KlipperScreen from Mainsail or a desktop, not from the panel. Afterwards, if
-KlipperScreen appeared, the fallback still works; bring Carbon back with the
-come-back line (or reboot). Do **not** use `carbon-panel-rollback` for this: if the
-update broke KlipperScreen, that would make the broken panel the boot default.
-Optional: stop Moonraker from restarting KlipperScreen after an update by deleting
-the `managed_services: KlipperScreen` line in `[update_manager KlipperScreen]`
-(`is_system_service: False` would not do it here: that option only sets the default,
-and this printer's moonraker.conf names the service explicitly). Then test the
-fallback by hand after each update (`sudo systemctl start KlipperScreen`, look, then
-the come-back line).
+**KlipperScreen updates.** `managed_services: KlipperScreen` makes Moonraker restart
+`KlipperScreen.service` after its pull and pip step. That STARTS it even though it is
+disabled, and Conflicts= stops Carbon. It happens on a per-row UPDATE, on UPDATE ALL
+(right after apt, not at the end, because Moonraker postpones only other services)
+and on any RECOVER of KlipperScreen. Update KlipperScreen alone, from Mainsail or
+desktop Carbon, never from the panel. Treat the handover as the test (live
+temperatures, the MMU screen), then run the come-back line. Never
+`carbon-panel-rollback`. KlipperScreen v3 cannot work with Moonraker 0.11, which
+revokes the trusted auth of v3's empty `api_key`, so update KlipperScreen v4 and then
+Moonraker in one sitting. To stop the restart, replace the line with an empty
+`managed_services:` or with `is_system_service: False`. Deleting the line alone
+restores the default, the section name. Restart Moonraker and confirm
+`GET /server/config` shows `"managed_services": []` for the section. Then test by
+hand after every KlipperScreen update.
 
 > Rollback: `sudo carbon-panel-rollback`, or `bash tools/kiosk/install_kiosk.sh --uninstall`
 
