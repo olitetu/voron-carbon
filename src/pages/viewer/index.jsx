@@ -10,6 +10,9 @@ import { S } from "../../lib/ui.js";
 import { useStore, useAsync, usePersisted } from "../../lib/useStore.js";
 
 const VIEWER_SRC = "viewer.js";
+// Mainsail's port on the printer since Carbon took port 80 (tools/move_mainsail_port.sh). Back to 80
+// if Mainsail ever moves back (`move_mainsail_port.sh --back`).
+const MAINSAIL_PORT = 81;
 let bundle = null;                       // one <script> per page load, shared by every mount
 
 /** Inject dist/viewer.js once and resolve with window.CarbonViewer. */
@@ -408,13 +411,14 @@ export default function Page({ store, api, route, navigate }) {
   }, [api, sel, plan, size, tubes, jobActive, stop, log, setRange, clearSurface]);
 
   // ---- Mainsail escape hatch ---------------------------------------------------------
-  // Mainsail sits at the printer root on :80 while Carbon is served from :8767 on the same host, so
-  // the port comes off. Its router is in HISTORY mode — there is NO '#' — and the query wants the
-  // root prefix: /viewer?filename=gcodes/<relpath>. Embedded, never target=_blank: Orca's
+  // Carbon owns the printer's port 80 (and keeps :8767), and Mainsail moved to MAINSAIL_PORT on the
+  // same host (tools/move_mainsail_port.sh, docs/PORT80.md), so whatever port Carbon was loaded from
+  // is swapped for Mainsail's. Its router is in HISTORY mode — there is NO '#' — and the query wants
+  // the root prefix: /viewer?filename=gcodes/<relpath>. Embedded, never target=_blank: Orca's
   // OnNewWindow handler would eject the user into their system browser and cancel the navigation.
   const mainsail = React.useMemo(() => {
     const host = String(api.base || location.origin).replace(/:\d+$/, "");
-    return host + "/viewer?filename=" + encodeURIComponent("gcodes/" + sel).replace(/%2F/g, "/");
+    return host + ":" + MAINSAIL_PORT + "/viewer?filename=" + encodeURIComponent("gcodes/" + sel).replace(/%2F/g, "/");
   }, [api, sel]);
   const [frameUp, setFrameUp] = React.useState(false);
   React.useEffect(() => { setFrameUp(false); }, [mainsail, embed]);   // a new src is a new load

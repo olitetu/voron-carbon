@@ -115,6 +115,10 @@ the same command without `--dry-run`. (Leaving `--root` off also works now: a re
 keeps the root the live site already serves. After Phase 2's relocate that is the
 relocated path, not `dist/`.)
 
+> Once Carbon also has port 80 ([PORT80.md](PORT80.md)), leave `--port` off in any re-run
+> too: a re-run keeps both ports, while `--port 8767` alone drops 80. The installer says so
+> (`PORT CHANGE 80 8767 -> 8767`); answer N.
+
 On a re-run the site is already enabled, so if `nginx -t` fails the installer puts
 the previous file back from its dated backup, and nginx is never reloaded with the
 broken one.
@@ -262,7 +266,9 @@ Chromium is running.
 
 The kiosk opens **`http://127.0.0.1:8767/screen.html`**, not the hostname. That is
 deliberate: the `/helper/` endpoints are loopback-only, and through the hostname
-the request arrives from the LAN address and is correctly denied.
+the request arrives from the LAN address and is correctly denied. It stays on 8767
+when Carbon also takes port 80 ([PORT80.md](PORT80.md)); the installer refuses a run
+that would stop serving the kiosk's port.
 
 Re-check by hand once:
 
@@ -468,7 +474,8 @@ outweighs every rule here.
 
 | | |
 |---|---|
-| `tools/install.sh` | nginx site on :8767 — serves the app, the panel, safe mode, and proxies the helper |
+| `tools/install.sh` | nginx site on :8767 (and :80, [PORT80.md](PORT80.md)) — serves the app, the panel, safe mode, and proxies the helper |
+| `tools/move_mainsail_port.sh` | moves Mainsail's site to :81 so Carbon can have :80; `--back` undoes it |
 | `tools/enable_updates.sh` | registers Carbon with Moonraker's update manager |
 | `tools/helper/` | the host helper: wifi, backlight, DPMS — loopback only |
 | `tools/kiosk/` | the panel itself: session and wait scripts, systemd units, the fallback, installer |

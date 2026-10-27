@@ -84,7 +84,9 @@ if [ -n "$RELOCATE" ]; then
   # editing /etc/nginx from here.
   [ -f tools/install.sh ] || fail "tools/install.sh not found — run this from the repo root."
   say "re-pointing nginx via install.sh"
-  bash tools/install.sh --root "$DEST" --port "$PORT" --yes
+  # No --port: a re-run keeps every port the live site serves. --port "$PORT" here would quietly drop
+  # the others, e.g. port 80 once Carbon is the default UI (docs/PORT80.md).
+  bash tools/install.sh --root "$DEST" --yes
   ROOT="$DEST"
 fi
 

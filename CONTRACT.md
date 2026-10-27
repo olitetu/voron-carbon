@@ -94,7 +94,7 @@ by easing `travel` toward the target over ~600ms in the logic's tick if you like
 - setFan: Part Fan→`M106 S${Math.round(v*2.55)}`; Chamber/Exhaust→`SET_FAN_SPEED FAN=${Chamber|Exhaust} SPEED=${(v/100).toFixed(2)}`; Hotend Fan & Controller are NOT settable (heater_fan/controller_fan) — render read-only bars, no click.
 - setLed(k,{color,pct,on}): design name → object: 'SB Leds'→sb_leds, 'Caselight'→caselight, 'MMU Leds'→mmu_leds, 'Logo'→logo. `SET_LED LED=${name} RED=${r} GREEN=${g} BLUE=${b} WHITE=0 TRANSMIT=1` with rgb = hex×(pct/100) (0..1, 3 decimals); off → all 0. Read state from `color_data[0]` → hex (normalized by max channel), pct = max channel×100, on = pct>0.
 - print: PAUSE→`api.pausePrint()`, RESUME→`api.resumePrint()`, CANCEL→confirm then `api.cancelPrint()`. estop: `api.emergencyStop()`; when klippy is 'shutdown' the button becomes RESTART FIRMWARE → `api.firmwareRestart()`. saveConfig → confirm → `SAVE_CONFIG`.
-- MMU: selectTool(i)→`T${i}` · selectGate(g)→`MMU_SELECT GATE=${g}` · bypass→`MMU_SELECT_BYPASS` · checkGate→`MMU_CHECK_GATE` · LOAD→`MMU_LOAD` · UNLOAD→`MMU_UNLOAD` · EJECT→`MMU_EJECT` · PRELOAD→`MMU_PRELOAD` · RECOVER→`MMU_RECOVER` · CUT→ `EREC_CUTTER_ACTION` — the cutter is at the MMU (EREC gate cutter), NOT at the toolhead, so CUT and tip-forming are two DIFFERENT operations and both buttons exist: CUT→`EREC_CUTTER_ACTION`, TIP→`MMU_FORM_TIP`. Do not animate the cut on a timer: the macro narrates itself with `RESPOND "EREC Cutter open"`/`"closed"` and `boot.js` drives the blade off those events · servo→`MMU_SERVO POS=${up|down}` · mmu menu: Recover→`MMU_RECOVER`, Reset→`MMU_RESET`, Edit gate map→navigate to Mainsail `http://voron.local/#/dashboard` (Mainsail's MMU panel has the editor) — or open the MMU_GATE_MAP dialog if you build one, Calibrate gates→`MMU_CHECK_GATES`, Filament stats→`MMU_STATS DETAIL=1`, MMU settings→`MMU_TEST_CONFIG`.
+- MMU: selectTool(i)→`T${i}` · selectGate(g)→`MMU_SELECT GATE=${g}` · bypass→`MMU_SELECT_BYPASS` · checkGate→`MMU_CHECK_GATE` · LOAD→`MMU_LOAD` · UNLOAD→`MMU_UNLOAD` · EJECT→`MMU_EJECT` · PRELOAD→`MMU_PRELOAD` · RECOVER→`MMU_RECOVER` · CUT→ `EREC_CUTTER_ACTION` — the cutter is at the MMU (EREC gate cutter), NOT at the toolhead, so CUT and tip-forming are two DIFFERENT operations and both buttons exist: CUT→`EREC_CUTTER_ACTION`, TIP→`MMU_FORM_TIP`. Do not animate the cut on a timer: the macro narrates itself with `RESPOND "EREC Cutter open"`/`"closed"` and `boot.js` drives the blade off those events · servo→`MMU_SERVO POS=${up|down}` · mmu menu: Recover→`MMU_RECOVER`, Reset→`MMU_RESET`, Edit gate map→the built-in GateEditor (`lib/GateEditor.jsx`, from the spool cards / SPOOLMAN gate strip / MMU menu); `editGateMap()` is a warn-only stub (Mainsail is at `http://voron.local:81/` since `docs/PORT80.md`), Calibrate gates→`MMU_CHECK_GATES`, Filament stats→`MMU_STATS DETAIL=1`, MMU settings→`MMU_TEST_CONFIG`.
   setEndless(gate, next): HH uses GROUPS (gates sharing a group are fallbacks): `MMU_ENDLESS_SPOOL GROUPS=${groups.join(',')}` — put `gate` into `next`'s group (or its own if null); read from `endless_spool_groups`. Also ensure `MMU_ENDLESS_SPOOL ENABLE=1` when a link is set.
 - extrudeMove(dir): `M83\nG1 E${dir>0?'':'-'}${len} F${rate*60}` (refuse if `!raw.extruder.can_extrude` → log "Extrude below minimum temp").
 - excludeObject(name): `EXCLUDE_OBJECT NAME=${name}` · includeObject(name): `EXCLUDE_OBJECT RESET=1 NAME=${name}`.
@@ -135,7 +135,8 @@ Common: use `<Panel>`; a page is a grid of panels sized to fill the viewport (th
 
 ## Addendum 2026-09-04 (supersedes anything above that conflicts)
 
-- **Serving**: Carbon runs on its OWN PORT (default 8767) via `tools/install.sh`, which generates an nginx server
+- **Serving**: Carbon runs on its OWN PORT (default 8767; port 80 too once Mainsail moves to 81 — `docs/PORT80.md`,
+  one server block listening on both) via `tools/install.sh`, which generates an nginx server
   proxying `/printer /server /api /access /machine /debug /websocket /webcam` to Moonraker so the app stays
   same-origin. The `/carbon/` subpath is DEAD — Mainsail's root-scoped service worker shadows it. `Host $http_host`
   in that config is load-bearing: Tornado compares Origin's netloc to the request Host *with the port*, so `$host`
@@ -148,7 +149,8 @@ Common: use `<Panel>`; a page is a grid of panels sized to fill the viewport (th
 - **Every page calls `useStore(store)` first** (pages are prop elements; React bails on re-render otherwise).
 - **Capabilities**: `src/lib/caps.js` over the latched `printer.gcode.commands` catalogue (367 commands, natives
   and Happy Hare python commands included; `has()` → null means "not loaded yet" = treat as available).
-- **Viewer deep link** into Mainsail is HISTORY-mode: `http://voron.local/viewer?filename=gcodes/<relpath>` — no
+- **Viewer deep link** into Mainsail is HISTORY-mode: `http://voron.local:81/viewer?filename=gcodes/<relpath>`
+  (Mainsail's port since Carbon took 80; `MAINSAIL_PORT` in `pages/viewer`) — no
   `#`, `gcodes/` prefix required. Native 3D viewer = `dist/viewer.js` (gcode-preview + three, lazy), stream via
   `processGCodeStream`; do not window (gzip and Range are mutually exclusive here). Size policy: tubes ≤ 50 MB,
   flat lines ≤ 150 MB, refuse above (417 MB max file is not renderable in a tab).

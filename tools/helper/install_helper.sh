@@ -104,7 +104,8 @@ sudo test -d /etc/polkit-1/rules.d || die "/etc/polkit-1/rules.d is missing -- i
 say "Checking the nginx /helper/ block"
 NGX="$(sudo nginx -T 2>/dev/null)" || die "sudo nginx -T failed: nginx's configuration does not load. See:  sudo nginx -t"
 SITE_ROOT="$(awk -v p="listen $SITE_PORT" 'index($0, p) {b = 1} b && $1 == "root" {sub(/;$/, "", $2); print $2; exit}' <<<"$NGX")"
-REGEN="cd $TOP && bash tools/install.sh --root ${SITE_ROOT:-<the root the site serves>} --port $SITE_PORT"
+# No --port: a re-run keeps every port the live site serves (80 too, once Carbon is the default UI).
+REGEN="cd $TOP && bash tools/install.sh --root ${SITE_ROOT:-<the root the site serves>}"
 HELPER_LOC='^[[:space:]]*location[[:space:]]+\^~[[:space:]]+/helper/'
 N="$(grep -cE "$HELPER_LOC" <<<"$NGX" || true)"
 [[ "$N" == 1 ]] || die "nginx has ${N:-0} 'location ^~ /helper/' blocks, expected exactly 1. Do NOT hand-edit the site; regenerate it:  $REGEN"

@@ -18,10 +18,12 @@ and the fallback.
 | printer objects it subscribes to or queries | `CORE_SUBS` in `src/lib/boot.js`, plus the `api.subscribe` / `api.query` calls elsewhere | 26 + 6 (`mmu_machine`, `mmu_leds unit0`, `manual_probe`, `gcode`, `scanner`, `gcode_macro _Z_OFFSET_VARS`), plus a dynamic sweep |
 | Moonraker methods it calls | `"namespace.method"` literals across `src/` | 57, derived at run time |
 | G-code it sends | command strings across `src/` | about 88 |
-| services | `carbon-kiosk`, `carbon-helper`, the nginx site `carbon` on :8767 | 3 |
+| services | `carbon-kiosk`, `carbon-helper`, the nginx site `carbon` on :8767 (and :80, [PORT80.md](PORT80.md)) | 3 |
 
 `tools/update_verify.py` derives objects, methods and G-code from the source, and checks the :8767 site,
-`/helper/`, and that carbon-kiosk owns the panel. It does not check Happy Hare parameter names.
+`/helper/`, and that carbon-kiosk owns the panel. It does not check Happy Hare parameter names. :8767 stays
+served when Carbon also has port 80, so every `--printer …:8767` below holds either way. Mainsail is then at
+`http://voron.local:81/`.
 
 Two findings worth keeping, because they are why the surface is more robust than it looks:
 
@@ -238,7 +240,8 @@ alone this run.
    sudo reboot
    ```
    If `nginx -t` fails, do not reboot: regenerate the site with `bash ~/voron-carbon/tools/install.sh
-   --root <current root>` (not the pre-cutover copy in voron-backup, which lacks `/helper/`). If
+   --root <current root>` (not the pre-cutover copy in voron-backup, which lacks `/helper/`; and no
+   `--port`, so the ports the site has, 80 and 8767 after PORT80.md, are kept). If
    Xwrapper.config changed: `printf 'allowed_users=anybody\nneeds_root_rights=yes\n' | sudo tee
    /etc/X11/Xwrapper.config`.
 
@@ -254,8 +257,9 @@ alone this run.
    Then prove the fallback with `sudo systemctl start KlipperScreen` (temperatures must change, not only
    paint), then the come-back line. The journal (`journalctl -t carbon-kiosk -n 3`) then reads
    `KlipperScreen already has the panel`: xinit 1.4.0 exits 1 on SIGTERM, so OnFailure= runs, harmlessly.
-4. **mainsail.** Hard-reload the browser. Then in `.theme/custom.css` on the printer, lines 467 and 471,
-   change `.text--disabled.body-2` to `.text--disabled.body-1:not(.text-center)` and keep the
+4. **mainsail.** Hard-reload the browser (Mainsail is at `:81` once Carbon has port 80). Then in
+   `.theme/custom.css` on the printer, lines 467 and 471, change `.text--disabled.body-2` to
+   `.text--disabled.body-1:not(.text-center)` and keep the
    `.v-card.mmu-panel .row:has(svg.svg-colors) > .col >` prefix. The badge block at 550-620 is now dead CSS.
 
 **Gate.** Go on to 5 and 6 only if 1-4 were clean, you are at the machine with about an hour and a USB

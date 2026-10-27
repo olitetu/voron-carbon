@@ -77,6 +77,21 @@ or IP address.
    http://PRINTER_HOST:8767/
    ```
 
+### Making Carbon the default UI (port 80)
+
+Port 80 is Mainsail's, and the installer refuses a port another nginx site holds. Move Mainsail to 81
+first, then give Carbon 80 **and keep 8767**: the panel kiosk, the runbooks and any `:8767` slicer preset
+keep working.
+
+```bash
+bash tools/move_mainsail_port.sh --dry-run && bash tools/move_mainsail_port.sh
+bash tools/install.sh --port 80 --also-port 8767 --dry-run
+bash tools/install.sh --port 80 --also-port 8767
+```
+
+Afterwards `http://PRINTER_HOST/` is Carbon, `:8767` is still Carbon and `:81` is Mainsail. Why 8767 stays,
+what else moves with it, and how to undo it (two commands): [docs/PORT80.md](docs/PORT80.md).
+
 ### Updating
 
 SSH to the printer host again, pull the latest version and rerun the installer:
@@ -90,8 +105,10 @@ bash tools/install.sh
 ```
 
 Leave `--root` off on an update: a re-run keeps the root the live site already serves, which is what the panel
-kiosk and Moonraker's update_manager depend on. The installer validates the new nginx configuration before reloading nginx. Carbon is static, so no Klipper or
-Moonraker restart is required.
+kiosk and Moonraker's update_manager depend on. Leave `--port` off too: a re-run keeps every port the live site
+listens on (80 and 8767 once Carbon is the default UI), while `--port` alone replaces them. The installer
+validates the new nginx configuration before reloading nginx. Carbon is static, so no Klipper or Moonraker
+restart is required.
 
 ## Layout
 
@@ -217,6 +234,9 @@ which sidesteps the service worker entirely, keeps the app same-origin with the 
 Tornado's `check_origin` compares host *with* port — hence `proxy_set_header Host $http_host` in the nginx conf,
 which is load-bearing), and makes Carbon a peer of Mainsail rather than a guest inside it.
 
+Port 80 itself is fine, as Carbon's own site rather than a path under Mainsail's: once Mainsail has moved to
+81, port 80 is just another origin ([docs/PORT80.md](docs/PORT80.md)).
+
 ### Interim URL, before the port is installed
 
 `http://<printer>/server/files/config/voron-ui/carbon/dist/index.html` works today — it is same-origin, and
@@ -234,6 +254,9 @@ visible in Advanced/Expert mode). Point it at Carbon's port and Carbon becomes y
 | **Device UI** (`print_host_webui`) | `http://<printer>:8767` |
 | API Key | **leave empty** |
 | Support 3MF as gcode | off |
+
+Once Carbon is the default UI ([docs/PORT80.md](docs/PORT80.md)), `http://<printer>` works for both fields too;
+`:8767` keeps working either way.
 
 Leave the API key empty: a non-empty key makes Orca inject a `window.fetch` monkey-patch and then reload, so the
 page loads twice on every navigation — and it patches only `fetch`, never `WebSocket`, so it would not reach the
@@ -256,6 +279,7 @@ Three constraints this places on the code, permanently:
 | `patch_template.py` | 33 binding rules over the generated template; fails loudly if the design moves |
 | `deploy.py` | uploads `dist/` + `tools/` to `config/voron-ui/carbon/` over the Moonraker file API |
 | `install.sh` | portable installer: detects the host, generates the nginx config, validates before enabling, backs out on failure |
+| `move_mainsail_port.sh` | moves Mainsail's nginx site to 81 (or back with `--back`) so Carbon can have port 80; same validate-then-reload rules |
 | `patch_gcode_preview.py` | the two allocation fixes; runs from `postinstall` |
 
 ## Design rules
